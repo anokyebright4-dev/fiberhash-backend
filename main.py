@@ -408,7 +408,7 @@ def make_decision(trust_score, quality_score, inlier_count, quality_flags):
         return {
                "decision": "pass",
                "is_match": True,
-               "message": "MATCH: verified."
+               "message": "MATCH: verified (image quality warning)."
        }
         
     if "IMAGE_TOO_BLURRY" in quality_flags:
