@@ -696,7 +696,10 @@ async def health():
 
 
 @app.post("/api/v1/verify")
-async def verify_direct(request: Request):
+async def verify_direct(
+    master_image: UploadFile = File(...),
+    field_scan: uploadFile = File(...)
+):
     """
     Direct comparison endpoint.
     FlutterFlow sends two uploaded files:
@@ -707,54 +710,10 @@ async def verify_direct(request: Request):
     """
 
     try:
-        form = await request.form()
+        master_bytes = await master_image.read()
+        field_bytes = await field_scan.read()
 
-        master_bytes, master_key = await get_uploaded_file_bytes(
-            form,
-            [
-                "master_image",
-                "masterImage",
-                "masterImageFile",
-                "FirstImage",
-                "firstImage",
-                "first_image",
-                "master",
-            ],
-        )
-
-        scan_bytes, scan_key = await get_uploaded_file_bytes(
-            form,
-            [
-                "field_scan",
-                "fieldScan",
-                "scanImageFile",
-                "SecondImage",
-                "secondImage",
-                "second_image",
-                "scan",
-            ],
-        )
-
-        if master_bytes is None or scan_bytes is None:
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "status": "error",
-                    "decision": "fail",
-                    "is_match": False,
-                    "trust_score": 0.0,
-                    "message": "The API did not receive both required uploaded files.",
-                    "received_keys": list(form.keys()),
-                    "expected_master_field": "master_image",
-                    "expected_scan_field": "field_scan",
-                },
-            )
-
-        result = run_verification(master_bytes, scan_bytes)
-
-        result["received_keys"] = list(form.keys())
-        result["master_field_used"] = master_key
-        result["scan_field_used"] = scan_key
+        result = run_verification(master_bytes, field_bytes)
 
         return result
 
