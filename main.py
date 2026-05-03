@@ -403,7 +403,15 @@ def make_decision(trust_score, quality_score, inlier_count, quality_flags):
             "is_match": False,
             "message": "Invalid image file. Please upload a clear image.",
         }
-
+    if trust_score >= 80 and inlier_count >= 1000:
+        return {
+            "decision": "pass",
+            "is_match": True,
+            "message": "MATCH: Surface
+        fingerprint verified. Image quality warning 
+        noted."
+             }
+        
     if "IMAGE_TOO_BLURRY" in quality_flags:
         return {
             "decision": "review",
