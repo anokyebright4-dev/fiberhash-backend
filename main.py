@@ -698,7 +698,7 @@ async def health():
 @app.post("/api/v1/verify")
 async def verify_direct(
     master_image: UploadFile = File(...),
-    field_scan: uploadFile = File(...)
+    field_scan: UploadFile = File(...)
 ):
     """
     Direct comparison endpoint.
