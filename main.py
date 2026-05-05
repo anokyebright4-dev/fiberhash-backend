@@ -87,7 +87,7 @@ def init_db():
         )
         """
     )
-cursor.execute()
+    cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS unit_fingerprints (
             unit_id TEXT PRIMARY KEY,
@@ -101,7 +101,7 @@ cursor.execute()
             created_at TEXT
         )
         """
-)
+     )
 
 
 conn.commit()
