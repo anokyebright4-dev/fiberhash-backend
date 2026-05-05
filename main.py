@@ -87,6 +87,21 @@ def init_db():
         )
         """
     )
+        cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS unit_fingerprints (
+            unit_id TEXT PRIMARY KEY,
+            product_name TEXT,
+            brand TEXT,
+            batch_code TEXT,
+            package_image_path TEXT,
+            package_image_hash TEXT,
+            seal_image_path TEXT,
+            seal_image_hash TEXT,
+            created_at TEXT
+        )
+        """
+    )
 
     conn.commit()
     conn.close()
