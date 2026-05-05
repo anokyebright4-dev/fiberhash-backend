@@ -101,6 +101,7 @@ cursor.execute(
             created_at TEXT
         )
         """
+)
 
 
 conn.commit()
