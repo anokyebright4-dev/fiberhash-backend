@@ -498,6 +498,93 @@ def create_product_record(product_name, brand, batch_code, master_image_path, ma
     conn.close()
 
     return product_id
+    def create_unit_record(
+    product_name,
+    brand,
+    batch_code,
+    package_image_path,
+    package_image_hash,
+    seal_image_path,
+    seal_image_hash
+):
+    unit_id = str(uuid.uuid4())
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        INSERT INTO unit_fingerprints (
+            unit_id,
+            product_name,
+            brand,
+            batch_code,
+            package_image_path,
+            package_image_hash,
+            seal_image_path,
+            seal_image_hash,
+            created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            unit_id,
+            product_name,
+            brand,
+            batch_code,
+            package_image_path,
+            package_image_hash,
+            seal_image_path,
+            seal_image_hash,
+            now_iso(),
+        ),
+    )
+
+    conn.commit()
+    conn.close()
+
+    return unit_id
+
+
+def get_unit_record(unit_id):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        SELECT
+            unit_id,
+            product_name,
+            brand,
+            batch_code,
+            package_image_path,
+            package_image_hash,
+            seal_image_path,
+            seal_image_hash,
+            created_at
+        FROM unit_fingerprints
+        WHERE unit_id = ?
+        """,
+        (unit_id,),
+    )
+
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return None
+
+    return {
+        "unit_id": row[0],
+        "product_name": row[1],
+        "brand": row[2],
+        "batch_code": row[3],
+        "package_image_path": row[4],
+        "package_image_hash": row[5],
+        "seal_image_path": row[6],
+        "seal_image_hash": row[7],
+        "created_at": row[8],
+    }
 
 
 def get_product(product_id):
