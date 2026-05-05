@@ -498,21 +498,13 @@ def create_product_record(product_name, brand, batch_code, master_image_path, ma
     conn.close()
 
     return product_id
-    def create_unit_record(
-    product_name,
-    brand,
-    batch_code,
-    package_image_path,
-    package_image_hash,
-    seal_image_path,
-    seal_image_hash
-):
-    unit_id = str(uuid.uuid4())
+    def create_unit_record( product_name, brand,  batch_code, package_image_path, package_image_hash, seal_image_path, seal_image_hash):
+          unit_id = str(uuid.uuid4())
 
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+          conn = sqlite3.connect(DB_PATH)
+          cursor = conn.cursor()
 
-    cursor.execute(
+          cursor.execute(
         """
         INSERT INTO unit_fingerprints (
             unit_id,
