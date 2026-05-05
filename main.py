@@ -101,10 +101,10 @@ cursor.execute(
             created_at TEXT
         )
         """
-    )
 
-    conn.commit()
-    conn.close()
+
+conn.commit()
+conn.close()
 
 
 init_db()
