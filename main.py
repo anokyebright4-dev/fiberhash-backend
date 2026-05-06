@@ -536,8 +536,6 @@ def create_unit_record( product_name, brand,  batch_code, package_image_path, pa
     conn.close()
 
     return unit_id
-
-
 def get_unit_record(unit_id):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
