@@ -498,7 +498,7 @@ def create_product_record(product_name, brand, batch_code, master_image_path, ma
     conn.close()
 
     return product_id
-    def create_unit_record( product_name, brand,  batch_code, package_image_path, package_image_hash, seal_image_path, seal_image_hash):
+def create_unit_record( product_name, brand,  batch_code, package_image_path, package_image_hash, seal_image_path, seal_image_hash):
           unit_id = str(uuid.uuid4())
 
           conn = sqlite3.connect(DB_PATH)
