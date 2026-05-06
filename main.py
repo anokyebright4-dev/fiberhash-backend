@@ -895,6 +895,36 @@ async def register_product(
                 "message": str(e),
             },
         )
+@app.post("/api/v1/units/register")
+async def register_unit(
+    product_name: str = Form(...),
+    brand: str = Form(...),
+    batch_code: str = Form(...),
+    package_image: UploadFile = File(...),
+    seal_image: UploadFile = File(...)
+):
+    package_bytes = await package_image.read()
+    seal_bytes = await seal_image.read()
+
+    package_hash = hashlib.sha256(package_bytes).hexdigest()
+    seal_hash = hashlib.sha256(seal_bytes).hexdigest()
+
+    unit_id = create_unit_record(
+        product_name,
+        brand,
+        batch_code,
+        package_image.filename,
+        package_hash,
+        seal_image.filename,
+        seal_hash
+    )
+
+    return {
+        "status": "registered",
+        "unit_id": unit_id,
+        "package_hash": package_hash,
+        "seal_hash": seal_hash
+    }
 
 
 @app.post("/api/v1/products/verify")
