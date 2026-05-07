@@ -909,7 +909,7 @@ async def register_unit(
 
     package_hash = hashlib.sha256(package_bytes).hexdigest()
     seal_hash = hashlib.sha256(seal_bytes).hexdigest()
-       package_file_path = f"uploads/{package_hash}.jpg"
+    package_file_path = f"uploads/{package_hash}.jpg"
     seal_file_path = f"uploads/{seal_hash}.jpg"
 
     with open(package_file_path, "wb") as f:
