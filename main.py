@@ -460,13 +460,13 @@ def make_decision(trust_score, quality_score, inlier_count, quality_flags):
     }
     
     def calculate_ai_risk(package_match, seal_match, package_result, seal_result):
-    package_quality_flags = package_result.get("quality", {}).get("quality_flags", [])
-    seal_quality_flags = seal_result.get("quality", {}).get("quality_flags", [])
+        package_quality_flags = package_result.get("quality", {}).get("quality_flags", [])
+        seal_quality_flags = seal_result.get("quality", {}).get("quality_flags", [])
 
-    package_trust = package_result.get("trust_score", 0)
-    seal_trust = seal_result.get("trust_score", 0)
+        package_trust = package_result.get("trust_score", 0)
+        seal_trust = seal_result.get("trust_score", 0)
 
-    reasons = []
+        reasons = []
 
     if package_match and seal_match:
         risk_level = "low"
