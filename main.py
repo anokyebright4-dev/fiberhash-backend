@@ -877,15 +877,15 @@ async def verify_unit(
         else:
             decision = "fail"
             trust_score = 0.0
- return {
-        "status": "verified",
-        "decision": decision,
-         "package_match": package_match,
-         "seal_match": seal_match,
-         "trust_score": trust_score,
-         "package_result": package_result,
-         "seal_result": seal_result,
-}
+        return {
+           "status": "verified",
+           "decision": decision,
+           "package_match": package_match,
+           "seal_match": seal_match,
+           "trust_score": trust_score,
+           "package_result": package_result,
+           "seal_result": seal_result,
+    }
 
     except Exception as e:
         return JSONResponse(
