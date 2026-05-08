@@ -877,7 +877,7 @@ async def verify_unit(
         else:
             decision = "fail"
             trust_score = 0.0
-   return {
+ return {
         "status": "verified",
         "decision": decision,
          "package_match": package_match,
