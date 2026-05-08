@@ -458,6 +458,50 @@ def make_decision(trust_score, quality_score, inlier_count, quality_flags):
         "is_match": False,
         "message": "MISMATCH: POSSIBLE COUNTERFEIT OR WRONG PRODUCT",
     }
+ def calculate_ai_risk(package_match, seal_match, package_result, seal_result):
+    package_quality_flags = package_result.get("quality", {}).get("quality_flags", [])
+    seal_quality_flags = seal_result.get("quality", {}).get("quality_flags", [])
+
+    package_trust = package_result.get("trust_score", 0)
+    seal_trust = seal_result.get("trust_score", 0)
+
+    reasons = []
+
+    if package_match and seal_match:
+        risk_level = "low"
+        recommended_action = "Accept verification result."
+        reasons.append("Package and seal both matched the registered unit.")
+
+    elif package_match and not seal_match:
+        risk_level = "high"
+        recommended_action = "Flag as possible tampering, resealing, or seal replacement."
+        reasons.append("Package matched but seal did not match.")
+
+    elif not package_match and seal_match:
+        risk_level = "high"
+        recommended_action = "Flag as possible component mismatch or suspicious seal transfer."
+        reasons.append("Seal matched but package did not match.")
+
+    else:
+        risk_level = "high"
+        recommended_action = "Reject or escalate as possible counterfeit or unknown product."
+        reasons.append("Both package and seal failed verification.")
+
+    if "IMAGE_TOO_BLURRY" in package_quality_flags or "IMAGE_TOO_BLURRY" in seal_quality_flags:
+        reasons.append("One or more scans were blurry.")
+
+    if "GLARE_DETECTED" in package_quality_flags or "GLARE_DETECTED" in seal_quality_flags:
+        reasons.append("Glare was detected in one or more scans.")
+
+    if package_trust < 35 or seal_trust < 35:
+        reasons.append("One or more trust scores were below review threshold.")
+
+    return {
+        "risk_level": risk_level,
+        "risk_score": 10 if risk_level == "low" else 85,
+        "risk_reasons": reasons,
+        "recommended_action": recommended_action,
+    }
 
 
 # ============================================================
@@ -877,12 +921,19 @@ async def verify_unit(
         else:
             decision = "fail"
             trust_score = 0.0
+        ai_risk = calculate_ai_risk(
+            package_match,
+            seal_match,
+            package_result,
+            seal_result,
+        )    
         return {
            "status": "verified",
            "decision": decision,
            "package_match": package_match,
            "seal_match": seal_match,
            "trust_score": trust_score,
+           "ai_risk": ai_risk,
            "package_result": package_result,
            "seal_result": seal_result,
     }
