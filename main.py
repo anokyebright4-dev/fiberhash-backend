@@ -855,16 +855,16 @@ async def verify_unit(
         master_bytes=read_file_bytes(unit["package_image_path"]),
         scan_bytes=package_scan_bytes,
         product_id=unit_id,
-        )
+   )
 
         seal_result = run_verification(
-        master_bytes=read_file_bytes(unit["seal_image_path"]),
-        scan_bytes=seal_scan_bytes,
-        product_id=unit_id,
+            master_bytes=read_file_bytes(unit["seal_image_path"]),
+            scan_bytes=seal_scan_bytes,
+            product_id=unit_id,
         )
 
-       package_match = package_result["decision"] == "pass"
-       seal_match = seal_result["decision"] == "pass"
+        package_match = package_result["decision"] == "pass"
+        seal_match = seal_result["decision"] == "pass"
 
         if package_match and seal_match:
             decision = "pass"
