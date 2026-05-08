@@ -830,7 +830,71 @@ async def verify_direct(
             },
         )
 
+@app.post("/api/v1/units/verify")
+async def verify_unit(
+    unit_id: str = Form(...),
+    package_scan: UploadFile = File(...),
+    seal_scan: UploadFile = File(...),
+):
+    try:
+        unit = get_unit_record(unit_id)
 
+        if not unit:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "status": "error",
+                    "decision": "fail",
+                    "message": "Unit not found",
+                },
+            )
+
+        package_scan_bytes = await package_scan.read()
+        seal_scan_bytes = await seal_scan.read()
+        package_result = run_verification(
+        master_bytes=read_file_bytes(unit["package_image_path"]),
+        scan_bytes=package_scan_bytes,
+        product_id=unit_id,
+        )
+
+        seal_result = run_verification(
+        master_bytes=read_file_bytes(unit["seal_image_path"]),
+        scan_bytes=seal_scan_bytes,
+        product_id=unit_id,
+        )
+
+       package_match = package_result["decision"] == "pass"
+       seal_match = seal_result["decision"] == "pass"
+
+        if package_match and seal_match:
+            decision = "pass"
+            trust_score = 100.0
+
+        elif package_match or seal_match:
+            decision = "review"
+            trust_score = 50.0
+
+        else:
+            decision = "fail"
+            trust_score = 0.0
+
+        return {
+            "status": "verified",
+            "decision": decision,
+            "package_match": package_match,
+            "seal_match": seal_match,
+            "trust_score": trust_score,
+        }
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "decision": "fail",
+                "message": str(e),
+            },
+        )
 @app.post("/api/v1/products/register")
 async def register_product(
     product_name: str = Form("Unnamed Product"),
