@@ -460,6 +460,8 @@ def make_decision(trust_score, quality_score, inlier_count, quality_flags):
     }
     
 def calculate_ai_risk(package_match, seal_match, package_result, seal_result):
+        package_result = package_result or {} 
+        seal_result = seal_result or {}
         package_quality_flags = package_result.get("quality", {}).get("quality_flags", [])
         seal_quality_flags = seal_result.get("quality", {}).get("quality_flags", [])
 
