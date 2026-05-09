@@ -925,7 +925,7 @@ async def verify_unit(
     unit_id: str = Form(...),
     package_scan: UploadFile = File(...),
     seal_scan: UploadFile = File(...),
-    package-capture_context: str = Form("consumer_scan"),
+    package_capture_context: str = Form("consumer_scan"),
     seal_capture_context: str = Form("consumer_scan"),
 ):
     try:
