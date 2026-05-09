@@ -102,17 +102,17 @@ def init_db():
         )
         """
      )
-   cursor.execute("""
-      CREATE TABLE IF NOT EXISTS unit_verification_events (
-           id INTEGER PRIMARY KEY AUTOINCREMENT,
-           unit_id TEXT,
-           decision TEXT,
-           package_match INTEGER,
-           seal_match INTEGER,
-           trust_score REAL,
-           ai_risk_level TEXT,
-           ai_risk_score REAL,
-           created_at TEXT
+    cursor.execute("""
+       CREATE TABLE IF NOT EXISTS unit_verification_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            unit_id TEXT,
+            decision TEXT,
+            package_match INTEGER,
+            seal_match INTEGER,
+            trust_score REAL,
+            ai_risk_level TEXT,
+            ai_risk_score REAL,
+            created_at TEXT
      )
 """)
     conn.commit()
