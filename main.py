@@ -1072,7 +1072,9 @@ async def register_unit(
     brand: str = Form(...),
     batch_code: str = Form(...),
     package_image: UploadFile = File(...),
-    seal_image: UploadFile = File(...)
+    seal_image: UploadFile = File(...),
+    package_capture_context: str = Form("factory_registration"),
+    seal_capture_context: str = Form("factory_reistration"),
 ):
     package_bytes = await package_image.read()
     seal_bytes = await seal_image.read()
