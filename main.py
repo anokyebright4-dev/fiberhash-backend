@@ -637,7 +637,38 @@ def get_unit_record(unit_id):
         "seal_image_hash": row[7],
         "created_at": row[8],
     }
+def log_unit_verification_event(unit_id, decision, package_match, seal_match, trust_score, ai_risk):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
 
+    cursor.execute(
+        """
+        INSERT INTO unit_verification_events (
+            unit_id,
+            decision,
+            package_match,
+            seal_match,
+            trust_score,
+            ai_risk_level,
+            ai_risk_score,
+            created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            unit_id,
+            decision,
+            int(package_match),
+            int(seal_match),
+            trust_score,
+            ai_risk.get("risk_level"),
+            ai_risk.get("risk_score"),
+            now_iso(),
+        ),
+    )
+
+    conn.commit()
+    conn.close()
 
 def get_product(product_id):
     conn = sqlite3.connect(DB_PATH)
@@ -941,7 +972,15 @@ async def verify_unit(
             seal_match,
             package_result,
             seal_result,
-        )    
+        ) 
+        log_unit_verification_event(
+            unit_id,
+            decision,
+            package_match,
+            seal_match,
+            trust_score,
+            ai_risk,
+        )
         return {
            "status": "verified",
            "decision": decision,
