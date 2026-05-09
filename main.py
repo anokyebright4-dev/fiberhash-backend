@@ -925,6 +925,8 @@ async def verify_unit(
     unit_id: str = Form(...),
     package_scan: UploadFile = File(...),
     seal_scan: UploadFile = File(...),
+    package-capture_context: str = Form("consumer_scan"),
+    seal_capture_context: str = Form("consumer_scan"),
 ):
     try:
         unit = get_unit_record(unit_id)
@@ -1074,7 +1076,7 @@ async def register_unit(
     package_image: UploadFile = File(...),
     seal_image: UploadFile = File(...),
     package_capture_context: str = Form("factory_registration"),
-    seal_capture_context: str = Form("factory_reistration"),
+    seal_capture_context: str = Form("factory_registration"),
 ):
     package_bytes = await package_image.read()
     seal_bytes = await seal_image.read()
