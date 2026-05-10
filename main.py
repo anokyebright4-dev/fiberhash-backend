@@ -1008,9 +1008,6 @@ async def verify_unit(
         seal_scan_bytes = seal_encoded.tobytes()
 
         package_result = run_verification(
-            ...
-        )
-        package_result = run_verification(
         master_bytes=read_file_bytes(unit["package_image_path"]),
         scan_bytes=package_scan_bytes,
         product_id=unit_id,
@@ -1147,7 +1144,17 @@ async def register_unit(
 ):
     package_bytes = await package_image.read()
     seal_bytes = await seal_image.read()
+    package_img = decode_image(package_bytes)
+    seal_img = decode_image(seal_bytes)
 
+    package_img = isolate_unprinted_package_surface(package_img)
+    seal_img = isolate_seal_surface(seal_img)
+
+    _, package_encoded = cv2.imencode(".jpg", package_img)
+    _, seal_encoded = cv2.imencode(".jpg", seal_img)
+
+    package_bytes = package_encoded.tobytes()
+    seal_bytes = seal_encoded.tobytes()
     package_hash = hashlib.sha256(package_bytes).hexdigest()
     seal_hash = hashlib.sha256(seal_bytes).hexdigest()
     package_file_path = f"uploads/{package_hash}.jpg"
