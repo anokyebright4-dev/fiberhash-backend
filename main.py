@@ -975,43 +975,33 @@ def isolate_unprinted_package_surface(img):
 def isolate_seal_surface(img):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # Blur slightly to reduce noise
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    blurred = cv2.GaussianBlur(gray, (7, 7), 0)
 
-    # Threshold to separate bright seal from darker background
-    _, thresh = cv2.threshold(
-        blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
-    )
+    edges = cv2.Canny(blurred, 50, 150)
 
-    # Find external contours
     contours, _ = cv2.findContours(
-        thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
 
-    # If nothing found, return original image
     if not contours:
         return img
 
-    # Select the largest contour (expected to be the seal)
     largest = max(contours, key=cv2.contourArea)
 
-    # Ignore tiny detections
     if cv2.contourArea(largest) < 1000:
         return img
 
-    # Create mask for the seal only
-    mask = np.zeros(gray.shape, dtype=np.uint8)
-    cv2.drawContours(mask, [largest], -1, 255, thickness=-1)
+    hull = cv2.convexHull(largest)
 
-    # Keep only the seal region
+    mask = np.zeros(gray.shape, dtype=np.uint8)
+    cv2.drawContours(mask, [hull], -1, 255, thickness=-1)
+
     isolated = cv2.bitwise_and(img, img, mask=mask)
 
-    # Crop tightly around the seal
-    x, y, w, h = cv2.boundingRect(largest)
+    x, y, w, h = cv2.boundingRect(hull)
     cropped = isolated[y:y+h, x:x+w]
 
     return cropped
-    
 @app.post("/api/v1/units/verify")
 async def verify_unit(
     unit_id: str = Form(...),
