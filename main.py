@@ -1000,7 +1000,9 @@ async def verify_unit(
 
         package_scan_img = isolate_unprinted_package_surface(package_scan_img)
         seal_scan_img = isolate_seal_surface(seal_scan_img)
-
+        os.makedirs("debug_rois", exist_ok=True)
+        cv2.imwrite("debug_rois/verify_package_roi.jpg", package_scan_img)
+        cv2.imwrite("debug_rois/verify_seal_roi.jpg", seal_scan_img)
         _, package_encoded = cv2.imencode(".jpg", package_scan_img)
         _, seal_encoded = cv2.imencode(".jpg", seal_scan_img)
 
@@ -1152,7 +1154,9 @@ async def register_unit(
 
     _, package_encoded = cv2.imencode(".jpg", package_img)
     _, seal_encoded = cv2.imencode(".jpg", seal_img)
-
+    os.makedirs("debug_rois", exist_ok=True)
+    cv2.imwrite("debug_rois/register_package_roi.jpg", package_img)
+    cv2.imwrite("debug_rois/register_seal_roi.jpg", seal_img)
     package_bytes = package_encoded.tobytes()
     seal_bytes = seal_encoded.tobytes()
     package_hash = hashlib.sha256(package_bytes).hexdigest()
