@@ -970,7 +970,8 @@ async def verify_direct(
                 "message": str(e),
             },
         )
-
+def isolate_unprinted_package_surface(img):
+    return img
 @app.post("/api/v1/units/verify")
 async def verify_unit(
     unit_id: str = Form(...),
