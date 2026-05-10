@@ -167,7 +167,58 @@ def normalize_image(image):
 
     enhanced = clahe.apply(gray)
     return enhanced
+def crop_largest_contour_region(image, min_area_ratio=0.02):
+    if image is None:
+        return None
 
+    original = image.copy()
+    height, width = image.shape[:2]
+    image_area = height * width
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    edges = cv2.Canny(blurred, 50, 150)
+
+    kernel = np.ones((5, 5), np.uint8)
+    edges = cv2.dilate(edges, kernel, iterations=1)
+    edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
+
+    contours, _ = cv2.findContours(
+        edges,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    if not contours:
+        return original
+
+    largest = max(contours, key=cv2.contourArea)
+    area = cv2.contourArea(largest)
+
+    if area < image_area * min_area_ratio:
+        return original
+
+    x, y, w, h = cv2.boundingRect(largest)
+
+    padding = 10
+    x1 = max(x - padding, 0)
+    y1 = max(y - padding, 0)
+    x2 = min(x + w + padding, width)
+    y2 = min(y + h + padding, height)
+
+    cropped = original[y1:y2, x1:x2]
+
+    return cropped
+
+
+def isolate_package_patch(image):
+    return crop_largest_contour_region(image, min_area_ratio=0.01)
+
+
+def isolate_seal_area(image):
+    return crop_largest_contour_region(image, min_area_ratio=0.02)
 
 def safe_float(value):
     try:
