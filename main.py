@@ -997,7 +997,7 @@ def isolate_seal_surface(img):
     x, y, r = circles[0][0]
 
     # Very small padding to keep only the seal and pull-tab
-    pad = int(r * 0.05)
+    pad = int(r * -0.03)
 
     x1 = max(0, x - r - pad)
     y1 = max(0, y - r - pad)
