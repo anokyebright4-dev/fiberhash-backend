@@ -976,37 +976,19 @@ def isolate_seal_surface(img):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
 def isolate_seal_surface(img):
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (7, 7), 0)
+    h, w = img.shape[:2]
 
-    circles = cv2.HoughCircles(
-        blurred,
-        cv2.HOUGH_GRADIENT,
-        dp=1.2,
-        minDist=100,
-        param1=80,
-        param2=30,
-        minRadius=40,
-        maxRadius=600
-    )
+    crop_size = int(min(h, w) * 0.75)
 
-    if circles is None:
-        return img
+    center_x = w // 2
+    center_y = h // 2
 
-    circles = np.round(circles).astype(int)
-    x, y, r = circles[0][0]
+    x1 = max(0, center_x - crop_size // 2)
+    y1 = max(0, center_y - crop_size // 2)
+    x2 = min(w, center_x + crop_size // 2)
+    y2 = min(h, center_y + crop_size // 2)
 
-    # Very small padding to keep only the seal and pull-tab
-    pad = int(r * -0.03)
-
-    x1 = max(0, x - r - pad)
-    y1 = max(0, y - r - pad)
-    x2 = min(img.shape[1], x + r + pad)
-    y2 = min(img.shape[0], y + r + pad)
-
-    cropped = img[y1:y2, x1:x2]
-
-    return cropped    
+    return img[y1:y2, x1:x2]  
 @app.post("/api/v1/units/verify")
 async def verify_unit(
     unit_id: str = Form(...),
