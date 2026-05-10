@@ -993,7 +993,7 @@ def isolate_seal_surface(img):
     if circles is None:
         return img
 
-    circles = np.uint16(np.around(circles))
+    circles = np.round(circles).astype(int)
     x, y, r = circles[0][0]
 
     # Very small padding to keep only the seal and pull-tab
