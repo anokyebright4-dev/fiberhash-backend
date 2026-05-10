@@ -975,33 +975,38 @@ def isolate_unprinted_package_surface(img):
 def isolate_seal_surface(img):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
+def isolate_seal_surface(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (7, 7), 0)
 
-    edges = cv2.Canny(blurred, 50, 150)
-
-    contours, _ = cv2.findContours(
-        edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    circles = cv2.HoughCircles(
+        blurred,
+        cv2.HOUGH_GRADIENT,
+        dp=1.2,
+        minDist=100,
+        param1=80,
+        param2=30,
+        minRadius=40,
+        maxRadius=600
     )
 
-    if not contours:
+    if circles is None:
         return img
 
-    largest = max(contours, key=cv2.contourArea)
+    circles = np.uint16(np.around(circles))
+    x, y, r = circles[0][0]
 
-    if cv2.contourArea(largest) < 1000:
-        return img
+    # Very small padding to keep only the seal and pull-tab
+    pad = int(r * 0.05)
 
-    hull = cv2.convexHull(largest)
+    x1 = max(0, x - r - pad)
+    y1 = max(0, y - r - pad)
+    x2 = min(img.shape[1], x + r + pad)
+    y2 = min(img.shape[0], y + r + pad)
 
-    mask = np.zeros(gray.shape, dtype=np.uint8)
-    cv2.drawContours(mask, [hull], -1, 255, thickness=-1)
+    cropped = img[y1:y2, x1:x2]
 
-    isolated = cv2.bitwise_and(img, img, mask=mask)
-
-    x, y, w, h = cv2.boundingRect(hull)
-    cropped = isolated[y:y+h, x:x+w]
-
-    return cropped  
+    return cropped    
 @app.post("/api/v1/units/verify")
 async def verify_unit(
     unit_id: str = Form(...),
