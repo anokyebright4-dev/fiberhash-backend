@@ -970,34 +970,66 @@ async def verify_direct(
                 "message": str(e),
             },
         )
-def isolate_unprinted_package_surface(img):
+def crop_center_square(img):
     h, w = img.shape[:2]
     crop_size = int(min(h, w) * 0.70)
 
-    center_x = w // 2
-    center_y = h // 2
+    cx = w // 2
+    cy = h // 2
 
-    x1 = max(0, center_x - crop_size // 2)
-    y1 = max(0, center_y - crop_size // 2)
-    x2 = min(w, center_x + crop_size // 2)
-    y2 = min(h, center_y + crop_size // 2)
+    x1 = max(0, cx - crop_size // 2)
+    y1 = max(0, cy - crop_size // 2)
+    x2 = min(w, cx + crop_size // 2)
+    y2 = min(h, cy + crop_size // 2)
 
     return img[y1:y2, x1:x2]
+
+
+def isolate_square_roi(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.Canny(blurred, 50, 150)
+
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    candidates = []
+
+    for c in contours:
+        area = cv2.contourArea(c)
+        if area < 2000:
+            continue
+
+        peri = cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, 0.04 * peri, True)
+
+        if len(approx) == 4:
+            x, y, w, h = cv2.boundingRect(approx)
+            ratio = w / float(h)
+
+            if 0.75 <= ratio <= 1.25:
+                candidates.append((area, x, y, w, h))
+
+    if not candidates:
+        return crop_center_square(img)
+
+    _, x, y, w, h = max(candidates, key=lambda item: item[0])
+
+    pad = int(min(w, h) * 0.05)
+
+    x1 = max(0, x - pad)
+    y1 = max(0, y - pad)
+    x2 = min(img.shape[1], x + w + pad)
+    y2 = min(img.shape[0], y + h + pad)
+
+    return img[y1:y2, x1:x2]
+
+
+def isolate_unprinted_package_surface(img):
+    return isolate_square_roi(img)
 
 
 def isolate_seal_surface(img):
-    h, w = img.shape[:2]
-    crop_size = int(min(h, w) * 0.70)
-
-    center_x = w // 2
-    center_y = h // 2
-
-    x1 = max(0, center_x - crop_size // 2)
-    y1 = max(0, center_y - crop_size // 2)
-    x2 = min(w, center_x + crop_size // 2)
-    y2 = min(h, center_y + crop_size // 2)
-
-    return img[y1:y2, x1:x2]
+    return isolate_square_roi(img)
     
 @app.post("/api/v1/units/verify")
 async def verify_unit(
