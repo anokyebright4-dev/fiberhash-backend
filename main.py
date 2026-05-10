@@ -1001,7 +1001,7 @@ def isolate_seal_surface(img):
     x, y, w, h = cv2.boundingRect(hull)
     cropped = isolated[y:y+h, x:x+w]
 
-    return cropped
+    return cropped  
 @app.post("/api/v1/units/verify")
 async def verify_unit(
     unit_id: str = Form(...),
