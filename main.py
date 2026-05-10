@@ -994,6 +994,22 @@ async def verify_unit(
 
         package_scan_bytes = await package_scan.read()
         seal_scan_bytes = await seal_scan.read()
+
+        package_scan_img = decode_image(package_scan_bytes)
+        seal_scan_img = decode_image(seal_scan_bytes)
+
+        package_scan_img = isolate_unprinted_package_surface(package_scan_img)
+        seal_scan_img = isolate_seal_surface(seal_scan_img)
+
+        _, package_encoded = cv2.imencode(".jpg", package_scan_img)
+        _, seal_encoded = cv2.imencode(".jpg", seal_scan_img)
+
+        package_scan_bytes = package_encoded.tobytes()
+        seal_scan_bytes = seal_encoded.tobytes()
+
+        package_result = run_verification(
+            ...
+        )
         package_result = run_verification(
         master_bytes=read_file_bytes(unit["package_image_path"]),
         scan_bytes=package_scan_bytes,
