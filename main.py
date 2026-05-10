@@ -971,14 +971,8 @@ async def verify_direct(
             },
         )
 def isolate_unprinted_package_surface(img):
-    return img
-def isolate_seal_surface(img):
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-def isolate_seal_surface(img):
     h, w = img.shape[:2]
-
-    crop_size = int(min(h, w) * 0.75)
+    crop_size = int(min(h, w) * 0.70)
 
     center_x = w // 2
     center_y = h // 2
@@ -988,7 +982,23 @@ def isolate_seal_surface(img):
     x2 = min(w, center_x + crop_size // 2)
     y2 = min(h, center_y + crop_size // 2)
 
-    return img[y1:y2, x1:x2]  
+    return img[y1:y2, x1:x2]
+
+
+def isolate_seal_surface(img):
+    h, w = img.shape[:2]
+    crop_size = int(min(h, w) * 0.70)
+
+    center_x = w // 2
+    center_y = h // 2
+
+    x1 = max(0, center_x - crop_size // 2)
+    y1 = max(0, center_y - crop_size // 2)
+    x2 = min(w, center_x + crop_size // 2)
+    y2 = min(h, center_y + crop_size // 2)
+
+    return img[y1:y2, x1:x2]
+    
 @app.post("/api/v1/units/verify")
 async def verify_unit(
     unit_id: str = Form(...),
