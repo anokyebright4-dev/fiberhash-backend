@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request, UploadFile, File, Form
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import cv2
 import numpy as np
@@ -1352,5 +1352,15 @@ async def debug_upload(request: Request):
             for key, value in form.items()
         },
     }
+@app.get("/debug/{filename}")
+async def get_debug_roi(filename: str):
+    filepath = os.path.join("debug_rois", filename)
 
+    if not os.path.exists(filepath):
+        return JSONResponse(
+            status_code=404,
+            content={"detail": "Not Found"}
+        )
+
+    return FileResponse(filepath)
 
