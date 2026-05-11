@@ -1021,7 +1021,7 @@ def isolate_square_roi(img):
     x2 = min(img.shape[1], x + w + pad)
     y2 = min(img.shape[0], y + h + pad)
 
-    return img[y1:y2, x1:x2]
+    return img[y:y+h, x:x+w]
 
 
 def isolate_unprinted_package_surface(img):
