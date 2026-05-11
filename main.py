@@ -1014,7 +1014,7 @@ def isolate_square_roi(img):
 
     _, x, y, w, h = max(candidates, key=lambda item: item[0])
 
-    pad = int(min(w, h) * 0.05)
+    pad = int(min(w, h) * 0.0)
 
     x1 = max(0, x - pad)
     y1 = max(0, y - pad)
