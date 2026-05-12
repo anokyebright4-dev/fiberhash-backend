@@ -1196,21 +1196,30 @@ async def register_product(
         )
 @app.post("/api/v1/units/register")
 async def register_unit(
+@app.post("/api/v1/units/register")
+async def register_unit(
+    product_id: str = Form(...),
     product_name: str = Form(...),
     brand: str = Form(...),
     batch_code: str = Form(...),
-    package_image: UploadFile = File(...),
-    seal_image: UploadFile = File(...),
+    package_image: UploadFile | None = File(None),
+    seal_image: UploadFile | None = File(None),
     package_capture_context: str = Form("factory_registration"),
     seal_capture_context: str = Form("factory_registration"),
-):
-    package_bytes = await package_image.read()
-    seal_bytes = await seal_image.read()
-    package_img = decode_image(package_bytes)
-    seal_img = decode_image(seal_bytes)
+):    
 
+    package_img = None
+    seal_img = None
+
+if package_image is not None:
+    package_bytes = await package_image.read()
+    package_img = decode_image(package_bytes)
     package_img = isolate_unprinted_package_surface(package_img)
-    seal_img = isolate_seal_surface(seal_img)
+
+if seal_image is not None:
+    seal_bytes = await seal_image.read()
+    seal_img = decode_image(seal_bytes)
+    seal_img = isolate_seal_surface(seal_img)    
 
     _, package_encoded = cv2.imencode(".jpg", package_img)
     _, seal_encoded = cv2.imencode(".jpg", seal_img)
