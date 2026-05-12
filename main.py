@@ -1194,8 +1194,7 @@ async def register_product(
                 "message": str(e),
             },
         )
-@app.post("/api/v1/units/register")
-async def register_unit(
+
 @app.post("/api/v1/units/register")
 async def register_unit(
     product_id: str = Form(...),
