@@ -1207,15 +1207,14 @@ async def register_unit(
     seal_capture_context: str = Form("factory_registration"),
 ):    
 
-    package_img = None
+package_img = None
     seal_img = None
-
-if package_image is not None:
+if  package_image is not None:
     package_bytes = await package_image.read()
     package_img = decode_image(package_bytes)
     package_img = isolate_unprinted_package_surface(package_img)
 
-if seal_image is not None:
+if  seal_image is not None:
     seal_bytes = await seal_image.read()
     seal_img = decode_image(seal_bytes)
     seal_img = isolate_seal_surface(seal_img)    
