@@ -1231,10 +1231,10 @@ async def register_unit(
         package_file_path = f"uploads/{package_hash}.jpg"
         seal_file_path = f"uploads/{seal_hash}.jpg"
 
-        with open(package_file_path, "wb") as f:
+   with open(package_file_path, "wb") as f:
         f.write(package_bytes)
 
-        with open(seal_file_path, "wb") as f:
+   with open(seal_file_path, "wb") as f:
         f.write(seal_bytes) 
 
         unit_id = create_unit_record(
