@@ -1248,6 +1248,10 @@ async def register_unit(
     )
         
     if package_img is None or seal_img is None:
+        package_hash = None
+        seal_hash = None  
+        
+    if package_img is None or seal_img is None:
         unit_id = create_unit_record(
             product_name,
             brand,
