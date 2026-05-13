@@ -1246,7 +1246,17 @@ async def register_unit(
             seal_file_path,
             seal_hash
     )
-
+        
+    if package_img is None or seal_img is None:
+        unit_id = create_unit_record(
+            product_name,
+            brand,
+            batch_code,
+            None,
+            None,
+            None,
+            None
+        )
     return {
         "status": "registered",
         "unit_id": unit_id,
