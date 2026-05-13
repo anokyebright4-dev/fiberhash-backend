@@ -1221,9 +1221,9 @@ async def register_unit(
     if  package_img is not None and seal_img is not None:
         _, package_encoded = cv2.imencode(".jpg", package_img)
         _, seal_encoded = cv2.imencode(".jpg", seal_img)
-           os.makedirs("debug_rois", exist_ok=True)
+         os.makedirs("debug_rois", exist_ok=True)
            cv2.imwrite("debug_rois/register_package_roi.jpg", package_img)
-           cv2.imwrite("debug_rois/register_seal_roi.jpg", seal_img)
+        cv2.imwrite("debug_rois/register_seal_roi.jpg", seal_img)
            package_bytes = package_encoded.tobytes()
            seal_bytes = seal_encoded.tobytes()
            package_hash = hashlib.sha256(package_bytes).hexdigest()
