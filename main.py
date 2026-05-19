@@ -610,9 +610,9 @@ def create_product_record(product_name, brand, batch_code, master_image_path, ma
     return product_id
 
 
-def create_unit_record(product_name, brand, batch_code, package_image_path, package_image_hash, seal_image_path, seal_image_hash):
-    unit_id = str(uuid.uuid4())
-
+def create_unit_record(unit_id,product_name, brand, batch_code, package_image_path, package_image_hash, seal_image_path, seal_image_hash):
+    unit_id = unit_id.strip()
+    
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
@@ -1238,7 +1238,8 @@ async def register_unit(
            f.write(seal_bytes) 
 
         unit_id = create_unit_record(
-        product_name,
+            product_id,
+            product_name,
             brand,
             batch_code,
             package_file_path,
@@ -1253,6 +1254,7 @@ async def register_unit(
         
     if package_img is None or seal_img is None:
         unit_id = create_unit_record(
+            product_id,
             product_name,
             brand,
             batch_code,
