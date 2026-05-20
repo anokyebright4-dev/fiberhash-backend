@@ -1250,7 +1250,7 @@ async def register_unit(
 
 # CASE 2: PARTIAL FILE UPLOAD IS NOT ALLOWED
 if package_image is None or seal_image is None:
-        return JSONResponse(
+         return JSONResponse(
             status_code=400,
             content={
                 "status": "error",
@@ -1261,10 +1261,10 @@ if package_image is None or seal_image is None:
 # CASE 3: FILES WERE SENT BUT PROCESSING FAILED
 if package_img is None or seal_img is None:
         return JSONResponse(
-        status_code=400,
-        content={
-            "status": "error",
-            "message": "Package or seal image could not be processed. Please retake both baseline images."
+            status_code=400,
+            content={
+                "status": "error",
+                "message": "Package or seal image could not be processed. Please retake both baseline images."
         }
     )
     
