@@ -618,7 +618,7 @@ def create_unit_record(unit_id,product_name, brand, batch_code, package_image_pa
 
     cursor.execute(
         """
-        INSERT INTO unit_fingerprints (
+        INSERT OR REPLACE INTO unit_fingerprints (
             unit_id,
             product_name,
             brand,
