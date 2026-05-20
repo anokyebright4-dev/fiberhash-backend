@@ -1239,7 +1239,7 @@ if package_image is None and seal_image is None:
     else:
         unit_id = product_id
         
-        return {
+           return {
           "status": "raw_registered",
           "unit_id": unit_id,
           "product_id": product_id,
