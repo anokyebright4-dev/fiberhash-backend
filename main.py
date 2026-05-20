@@ -1238,16 +1238,15 @@ if package_image is None and seal_image is None:
         )
     else:
         unit_id = product_id
-        
-         return {
-           "status": "raw_registered",
-           "unit_id": unit_id,
-           "product_id": product_id,
-           "product_name": product_name,
-           "brand": brand,
-           "batch_code": batch_code,
-           "message": "Raw Unit ID registered. Package and seal baselines can be captured next."
-     }
+    return {
+        "status": "raw_registered",
+        "unit_id": unit_id,
+        "product_id": product_id,
+        "product_name": product_name,
+        "brand": brand,
+        "batch_code": batch_code,
+        "message": "Raw Unit ID registered. Package and seal baselines can be captured next."
+    }
 
 # CASE 2: PARTIAL FILE UPLOAD IS NOT ALLOWED
 if package_image is None or seal_image is None:
