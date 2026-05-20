@@ -1268,7 +1268,7 @@ if package_img is None or seal_img is None:
         }
     )
     
-    if  package_img is not None and seal_img is not None:
+if  package_img is not None and seal_img is not None:
         _, package_encoded = cv2.imencode(".jpg", package_img)
         _, seal_encoded = cv2.imencode(".jpg", seal_img)
         os.makedirs("debug_rois", exist_ok=True)
