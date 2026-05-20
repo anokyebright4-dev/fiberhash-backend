@@ -1217,7 +1217,58 @@ async def register_unit(
     if  seal_image is not None:
         seal_bytes = await seal_image.read()
         seal_img = decode_image(seal_bytes)
-        seal_img = isolate_seal_surface(seal_img)    
+        seal_img = isolate_seal_surface(seal_img) 
+
+
+# CASE 1: RAW UNIT REGISTRATION ONLY
+# This only runs when no package_image and no seal_image file was sent.
+if package_image is None and seal_image is None:
+    existing_unit = get_unit_record(product_id)
+
+    if existing_unit is None:
+        unit_id = create_unit_record(
+            product_id,
+            product_name,
+            brand,
+            batch_code,
+            None,
+            None,
+            None,
+            None
+        )
+    else:
+        unit_id = product_id
+
+    return {
+        "status": "raw_registered",
+        "unit_id": unit_id,
+        "product_id": product_id,
+        "product_name": product_name,
+        "brand": brand,
+        "batch_code": batch_code,
+        "message": "Raw Unit ID registered. Package and seal baselines can be captured next."
+    }
+
+# CASE 2: PARTIAL FILE UPLOAD IS NOT ALLOWED
+if package_image is None or seal_image is None:
+    return JSONResponse(
+        status_code=400,
+        content={
+            "status": "error",
+            "message": "Both package_image and seal_image are required for baseline registration."
+        }
+    )
+
+# CASE 3: FILES WERE SENT BUT PROCESSING FAILED
+if package_img is None or seal_img is None:
+    return JSONResponse(
+        status_code=400,
+        content={
+            "status": "error",
+            "message": "Package or seal image could not be processed. Please retake both baseline images."
+        }
+    )
+    
     if  package_img is not None and seal_img is not None:
         _, package_encoded = cv2.imencode(".jpg", package_img)
         _, seal_encoded = cv2.imencode(".jpg", seal_img)
@@ -1246,17 +1297,18 @@ async def register_unit(
             package_hash,
             seal_file_path,
             seal_hash
-    )
-        
-    if package_img is None or seal_img is None:
-           return JSONResponse(
-               status_code=400,
-               content={
-                   "status": "error",
-                   "message": "Both package_image and seal_image are required for baseline registration."
+    )   
+        return {
+            "status": "registered",
+            "unit_id": unit_id,
+            "product_id": product_id,
+            "product_name": product_name,
+            "brand": brand,
+            "batch_code": batch_code,
+            "package_hash": package_hash,
+            "seal_hash": seal_hash,
+            "message": "Package and seal baselines registered successfully."
         }
-    )    
-
 @app.post("/api/v1/products/verify")
 async def verify_registered_product(
     product_id: str = Form(...),
