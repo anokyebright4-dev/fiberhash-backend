@@ -1251,10 +1251,10 @@ async def register_unit(
 # CASE 2: PARTIAL FILE UPLOAD IS NOT ALLOWED
 if package_image is None or seal_image is None:
         return JSONResponse(
-        status_code=400,
-        content={
-            "status": "error",
-            "message": "Both package_image and seal_image are required for baseline registration."
+            status_code=400,
+            content={
+                "status": "error",
+                "message": "Both package_image and seal_image are required for baseline registration."
         }
     )
 
