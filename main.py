@@ -1248,28 +1248,14 @@ async def register_unit(
             seal_hash
     )
         
-    if package_img is None or seal_img is None:
-        package_hash = None
-        seal_hash = None  
-        
-    if package_img is None or seal_img is None:
-        unit_id = create_unit_record(
-            product_id,
-            product_name,
-            brand,
-            batch_code,
-            None,
-            None,
-            None,
-            None
-        )
-    return {
-        "status": "registered",
-        "unit_id": unit_id,
-        "package_hash": package_hash,
-        "seal_hash": seal_hash
-    }
-
+if package_img is None or seal_img is None:
+    return JSONResponse(
+        status_code=400,
+        content={
+            "status": "error",
+            "message": "Both package_image and seal_image are required for baseline registration."
+        }
+    )    
 
 @app.post("/api/v1/products/verify")
 async def verify_registered_product(
