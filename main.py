@@ -1248,12 +1248,12 @@ async def register_unit(
             seal_hash
     )
         
-if package_img is None or seal_img is None:
-    return JSONResponse(
-        status_code=400,
-        content={
-            "status": "error",
-            "message": "Both package_image and seal_image are required for baseline registration."
+    if package_img is None or seal_img is None:
+           return JSONResponse(
+               status_code=400,
+               content={
+                   "status": "error",
+                   "message": "Both package_image and seal_image are required for baseline registration."
         }
     )    
 
