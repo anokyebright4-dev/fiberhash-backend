@@ -1249,8 +1249,8 @@ async def register_unit(
     }
 
 # CASE 2: PARTIAL FILE UPLOAD IS NOT ALLOWED
-if package_image is None or seal_image is None:
-         return JSONResponse(
+    if package_image is None or seal_image is None:
+        return JSONResponse(
             status_code=400,
             content={
                 "status": "error",
@@ -1259,7 +1259,7 @@ if package_image is None or seal_image is None:
     )
 
 # CASE 3: FILES WERE SENT BUT PROCESSING FAILED
-if package_img is None or seal_img is None:
+    if package_img is None or seal_img is None:
         return JSONResponse(
             status_code=400,
             content={
@@ -1268,7 +1268,7 @@ if package_img is None or seal_img is None:
         }
     )
     
-if  package_img is not None and seal_img is not None:
+    if  package_img is not None and seal_img is not None:
         _, package_encoded = cv2.imencode(".jpg", package_img)
         _, seal_encoded = cv2.imencode(".jpg", seal_img)
         os.makedirs("debug_rois", exist_ok=True)
