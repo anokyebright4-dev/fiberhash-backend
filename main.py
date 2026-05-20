@@ -1236,7 +1236,7 @@ if package_image is None and seal_image is None:
             None,
             None
         )
-    else:
+        else:
         unit_id = product_id
         
         return {
@@ -1247,7 +1247,7 @@ if package_image is None and seal_image is None:
           "brand": brand,
           "batch_code": batch_code,
           "message": "Raw Unit ID registered. Package and seal baselines can be captured next."
-    }
+     }
 
 # CASE 2: PARTIAL FILE UPLOAD IS NOT ALLOWED
 if package_image is None or seal_image is None:
