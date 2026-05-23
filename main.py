@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request, UploadFile, File, Form
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+import io
 import cv2
 import numpy as np
 import uvicorn
@@ -10,6 +11,7 @@ import os
 import json
 import uuid
 from datetime import datetime, timezone
+from PIL import Image, ImageOps
 
 
 # ============================================================
