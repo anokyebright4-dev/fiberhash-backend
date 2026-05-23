@@ -146,22 +146,49 @@ def read_file_bytes(file_path: str) -> bytes:
     with open(file_path, "rb") as f:
         return f.read()
 
-
 def decode_image(image_bytes: bytes):
     if not image_bytes:
         return None
 
-    nparr = np.frombuffer(image_bytes, np.uint8)
-    image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    return image
+    try:
+        pil_img = Image.open(io.BytesIO(image_bytes))
+        pil_img = ImageOps.exif_transpose(pil_img)
+        pil_img = pil_img.convert("RGB")
 
+        rgb = np.array(pil_img)
 
-def normalize_image(image):
+        # Convert RGB to BGR because the rest of your OpenCV code expects BGR
+        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+
+        return bgr
+
+    except Exception:
+        return None
+
+def normalize_image(image, target_size=1024):
     if image is None:
         return None
 
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    h, w = image.shape[:2]
 
+    # Centre square crop
+    side = min(h, w)
+    x1 = (w - side) // 2
+    y1 = (h - side) // 2
+    square = image[y1:y1 + side, x1:x1 + side]
+
+    # Resize every image to the same size before SIFT
+    interpolation = cv2.INTER_AREA if side > target_size else cv2.INTER_CUBIC
+    resized = cv2.resize(
+        square,
+        (target_size, target_size),
+        interpolation=interpolation
+    )
+
+    # Convert to grayscale
+    gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+
+    # Apply CLAHE for lighting/shadow normalisation
     clahe = cv2.createCLAHE(
         clipLimit=2.0,
         tileGridSize=(8, 8)
