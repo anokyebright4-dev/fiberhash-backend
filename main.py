@@ -463,26 +463,23 @@ def sift_match(master_gray, scan_gray):
     result["inlier_count"] = inlier_count
     result["homography_found"] = homography_found
 
-    max_keypoints = max(result["total_keypoints_master"], result["total_keypoints_scan"])
-
-    if max_keypoints <= 0:
-        return result
-
-    feature_score = (good_match_count / max_keypoints) * 100
-
     if good_match_count > 0:
-        inlier_ratio = inlier_count / good_match_count
-    else:
-        inlier_ratio = 0.0
+    inlier_ratio = inlier_count / good_match_count
+else:
+    inlier_ratio = 0.0
 
-    homography_bonus = inlier_ratio * 40
+# Phone-friendly R&D scoring:
+# Good matches and geometric inliers matter more than raw keypoint percentage.
+match_score = min(good_match_count / 25, 1.0) * 35
+inlier_score = min(inlier_count / 20, 1.0) * 45
+geometry_score = inlier_ratio * 20
 
-    trust_score = (feature_score * 0.6) + homography_bonus
-    trust_score = max(0.0, min(100.0, trust_score))
+trust_score = match_score + inlier_score + geometry_score
+trust_score = max(0.0, min(100.0, trust_score))
 
-    result["trust_score"] = round(trust_score, 2)
+result["trust_score"] = round(trust_score, 2)
 
-    if result["trust_score"] >= 65 and inlier_count >= 12:
+    if result["trust_score"] >= 60 and inlier_count >= 10:
         result["match_quality"] = "strong"
     elif result["trust_score"] >= 35 and inlier_count >= 6:
         result["match_quality"] = "moderate"
@@ -532,7 +529,7 @@ def make_decision(trust_score, quality_score, inlier_count, quality_flags):
             "message": "Scan quality is weak. Please rescan before making a final decision.",
         }
 
-    if trust_score >= 65 and inlier_count >= 12:
+    if trust_score >= 60 and inlier_count >= 10:
         return {
             "decision": "pass",
             "is_match": True,
@@ -904,7 +901,7 @@ def run_verification(master_bytes, scan_bytes, product_id=None):
         "is_match": decision["is_match"],
         "trust_score": matching["trust_score"],
         "threshold_policy": {
-            "pass": "trust_score >= 65 and inlier_count >= 12",
+            "pass": "trust_score >= 60 and inlier_count >= 10",
             "review": "trust_score >= 35 and inlier_count >= 6, or weak image quality",
             "fail": "below review threshold or invalid image",
         },
