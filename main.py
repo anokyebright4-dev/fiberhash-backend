@@ -484,7 +484,7 @@ elif result["trust_score"] >= 20:
     result["match_quality"] = "weak"
 else:
     result["match_quality"] = "poor"
-    return result
+        return result
 
 
 # ============================================================
