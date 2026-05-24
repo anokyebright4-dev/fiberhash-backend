@@ -1063,33 +1063,31 @@ async def verify_unit(
 ):
     try:
         unit = get_unit_record(unit_id)
-
-    if not unit:
-    print("===== UNIT NOT FOUND DEBUG =====")
-    print("received unit_id:", unit_id)
-    print("unit_id length:", len(unit_id) if unit_id else 0)
-    print("===============================")
-
-    return JSONResponse(
-        status_code=404,
-        content={
-            "status": "error",
-            "decision": "fail",
-            "package_match": False,
-            "seal_match": False,
-            "trust_score": 0,
-            "message": "Unit not found",
-            "received_unit_id": unit_id,
-            "ai_risk": {
-                "risk_level": "high",
-                "risk_score": 85,
-                "recommended_action": "Unit ID was not found in the registered unit database.",
-                "risk_reasons": [
-                    "The unit_id sent during verification does not match a registered public unit ID."
-                ],
-            },
-        },
-    )
+        if not unit:
+            print("===== UNIT NOT FOUND DEBUG =====")
+            print("received unit_id:", unit_id)
+            print("unit_id length:", len(unit_id) if unit_id else 0)
+            print("===============================")
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "status": "error",
+                    "decision": "fail",
+                    "package_match": False,
+                    "seal_match": False,
+                    "trust_score": 0,
+                    "message": "Unit not found",
+                    "received_unit_id": unit_id,
+                    "ai_risk": {
+                        "risk_level": "high",
+                        "risk_score": 85,
+                        "recommended_action": "Unit ID was not found in the registered unit database.",
+                        "risk_reasons": [
+                            "The unit_id sent during verification does not match a registered public unit ID."
+                        ],
+                    },
+                },
+            )
 
         package_scan_bytes = await package_scan.read()
         seal_scan_bytes = await seal_scan.read()
