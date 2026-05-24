@@ -504,7 +504,7 @@ def make_decision(trust_score, quality_score, inlier_count, quality_flags):
             "message": "Invalid image file. Please upload a clear image.",
         }
         
-    if trust_score >= 80 and inlier_count >= 1000:
+    if trust_score >= 80 and inlier_count >= 20:
         return {
                "decision": "pass",
                "is_match": True,
