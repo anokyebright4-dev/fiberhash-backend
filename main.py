@@ -1139,15 +1139,25 @@ async def verify_unit(
             ai_risk,
         )
         return {
-           "status": "verified",
-           "decision": decision,
-           "package_match": package_match,
-           "seal_match": seal_match,
-           "trust_score": trust_score,
-           "ai_risk": ai_risk,
-           "package_result": package_result,
-           "seal_result": seal_result,
-    }
+            "status": "verified",
+            "decision": decision,
+            "package_match": package_match,
+            "seal_match": seal_match,
+            "trust_score": trust_score,
+            "package_trust_score": package_result.get("trust_score", 0),
+            "seal_trust_score": seal_result.get("trust_score", 0),
+            "package_inlier_count": package_result.get("matching", {}).get("inlier_count", 0),
+            "seal_inlier_count": seal_result.get("matching", {}).get("inlier_count", 0),
+            "package_good_match_count": package_result.get("matching", {}).get("good_match_count", 0),
+            "seal_good_match_count": seal_result.get("matching", {}).get("good_match_count", 0),
+            "package_keypoints_master": package_result.get("matching", {}).get("total_keypoints_master", 0),
+            "package_keypoints_scan": package_result.get("matching", {}).get("total_keypoints_scan", 0),
+            "seal_keypoints_master": seal_result.get("matching", {}).get("total_keypoints_master", 0),
+            "seal_keypoints_scan": seal_result.get("matching", {}).get("total_keypoints_scan", 0),
+            "ai_risk": ai_risk,
+            "package_result": package_result,
+            "seal_result": seal_result,
+        }
 
     except Exception as e:
         return JSONResponse(
