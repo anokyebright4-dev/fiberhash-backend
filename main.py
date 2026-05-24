@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request, UploadFile, File, Form
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 import io
 import cv2
@@ -1507,6 +1507,96 @@ async def debug_upload(request: Request):
             for key, value in form.items()
         },
     }
+@app.get("/phone-test", response_class=HTMLResponse)
+async def phone_test_page():
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>FiberHash Phone Camera Test</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                padding: 20px;
+                background: #111;
+                color: #fff;
+            }
+            input, button {
+                width: 100%;
+                margin: 10px 0;
+                padding: 12px;
+                font-size: 16px;
+            }
+            button {
+                background: #4f46e5;
+                color: white;
+                border: none;
+                border-radius: 6px;
+            }
+            pre {
+                background: #222;
+                padding: 12px;
+                overflow-x: auto;
+                white-space: pre-wrap;
+            }
+        </style>
+    </head>
+    <body>
+        <h2>FiberHash SealLock Phone Test</h2>
+
+        <label>Unit ID</label>
+        <input id="unit_id" type="text" placeholder="Enter public unit ID">
+
+        <label>Package scan</label>
+        <input id="package_scan" type="file" accept="image/*" capture="environment">
+
+        <label>Seal scan</label>
+        <input id="seal_scan" type="file" accept="image/*" capture="environment">
+
+        <button onclick="submitVerify()">Verify</button>
+
+        <h3>Result</h3>
+        <pre id="result">Waiting...</pre>
+
+        <script>
+            async function submitVerify() {
+                const unitId = document.getElementById("unit_id").value;
+                const packageFile = document.getElementById("package_scan").files[0];
+                const sealFile = document.getElementById("seal_scan").files[0];
+
+                if (!unitId || !packageFile || !sealFile) {
+                    document.getElementById("result").textContent =
+                        "Please enter unit ID and select both images.";
+                    return;
+                }
+
+                const formData = new FormData();
+                formData.append("unit_id", unitId);
+                formData.append("package_scan", packageFile);
+                formData.append("seal_scan", sealFile);
+
+                document.getElementById("result").textContent = "Submitting...";
+
+                try {
+                    const response = await fetch("/api/v1/units/verify", {
+                        method: "POST",
+                        body: formData
+                    });
+
+                    const data = await response.json();
+                    document.getElementById("result").textContent =
+                        JSON.stringify(data, null, 2);
+
+                } catch (err) {
+                    document.getElementById("result").textContent =
+                        "Error: " + err.message;
+                }
+            }
+        </script>
+    </body>
+    </html>
+    """    
 @app.get("/debug/{filename}")
 async def get_debug_roi(filename: str):
     filepath = os.path.join("debug_rois", filename)
