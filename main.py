@@ -483,8 +483,8 @@ elif result["trust_score"] >= 35 and inlier_count >= 6:
 elif result["trust_score"] >= 20:
     result["match_quality"] = "weak"
 else:
-    result["match_quality"] = "poor"
-        return result
+result["match_quality"] = "poor"
+return result
 
 
 # ============================================================
