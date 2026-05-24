@@ -467,7 +467,7 @@ def sift_match(master_gray, scan_gray):
         inlier_ratio = inlier_count / good_match_count
     else:
         inlier_ratio = 0.0
-        # Phone-friendly R&D scoring:
+# Phone-friendly R&D scoring:
 # Good matches and geometric inliers matter more than raw keypoint percentage.
 match_score = min(good_match_count / 25, 1.0) * 35
 inlier_score = min(inlier_count / 20, 1.0) * 45
@@ -483,8 +483,8 @@ elif result["trust_score"] >= 35 and inlier_count >= 6:
 elif result["trust_score"] >= 20:
     result["match_quality"] = "weak"
 else:
-        result["match_quality"] = "poor"
-        return result
+    result["match_quality"] = "poor"
+return result
 
 
 # ============================================================
