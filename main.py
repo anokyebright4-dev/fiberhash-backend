@@ -1117,7 +1117,21 @@ async def verify_unit(
             scan_bytes=seal_scan_bytes,
             product_id=unit_id,
         )
-
+        print("===== UNIT VERIFY MATCH DEBUG =====")
+        print("unit_id:", unit_id)
+        print("package decision:", package_result.get("decision"))
+        print("package trust:", package_result.get("trust_score"))
+        print("package inliers:", package_result.get("matching", {}).get("inlier_count"))
+        print("package good matches:", package_result.get("matching", {}).get("good_match_count"))
+        print("package master keypoints:", package_result.get("matching", {}).get("total_keypoints_master"))
+        print("package scan keypoints:", package_result.get("matching", {}).get("total_keypoints_scan"))
+        print("seal decision:", seal_result.get("decision"))
+        print("seal trust:", seal_result.get("trust_score"))
+        print("seal inliers:", seal_result.get("matching", {}).get("inlier_count"))
+        print("seal good matches:", seal_result.get("matching", {}).get("good_match_count"))
+        print("seal master keypoints:", seal_result.get("matching", {}).get("total_keypoints_master"))
+        print("seal scan keypoints:", seal_result.get("matching", {}).get("total_keypoints_scan"))
+        print("===================================")
         package_match = package_result["decision"] == "pass"
         seal_match = seal_result["decision"] == "pass"
 
