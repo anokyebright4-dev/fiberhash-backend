@@ -1507,6 +1507,113 @@ async def debug_upload(request: Request):
             for key, value in form.items()
         },
     }
+@app.get("/phone-register", response_class=HTMLResponse)
+async def phone_register_page():
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>FiberHash Phone Registration</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                padding: 20px;
+                background: #111;
+                color: #fff;
+            }
+            input, button {
+                width: 100%;
+                margin: 10px 0;
+                padding: 12px;
+                font-size: 16px;
+            }
+            button {
+                background: #16a34a;
+                color: white;
+                border: none;
+                border-radius: 6px;
+            }
+            pre {
+                background: #222;
+                padding: 12px;
+                overflow-x: auto;
+                white-space: pre-wrap;
+            }
+        </style>
+    </head>
+    <body>
+        <h2>FiberHash SealLock Phone Registration</h2>
+
+        <label>Public Unit ID</label>
+        <input id="unit_id" type="text" placeholder="Example: TEST200">
+
+        <label>Product Name</label>
+        <input id="product_name" type="text" value="Test Product">
+
+        <label>Brand</label>
+        <input id="brand" type="text" value="Test Brand">
+
+        <label>Batch Code</label>
+        <input id="batch_code" type="text" value="TEST-BATCH">
+
+        <label>Package baseline</label>
+        <input id="package_image" type="file" accept="image/*" capture="environment">
+
+        <label>Seal baseline</label>
+        <input id="seal_image" type="file" accept="image/*" capture="environment">
+
+        <button onclick="submitRegister()">Register Unit</button>
+
+        <h3>Result</h3>
+        <pre id="result">Waiting...</pre>
+
+        <script>
+            async function submitRegister() {
+                const unitId = document.getElementById("unit_id").value;
+                const productName = document.getElementById("product_name").value;
+                const brand = document.getElementById("brand").value;
+                const batchCode = document.getElementById("batch_code").value;
+                const packageFile = document.getElementById("package_image").files[0];
+                const sealFile = document.getElementById("seal_image").files[0];
+
+                if (!unitId || !packageFile || !sealFile) {
+                    document.getElementById("result").textContent =
+                        "Please enter Unit ID and select both baseline images.";
+                    return;
+                }
+
+                const formData = new FormData();
+
+                // Your backend uses product_id as the public physical unit ID
+                formData.append("product_id", unitId);
+                formData.append("product_name", productName);
+                formData.append("brand", brand);
+                formData.append("batch_code", batchCode);
+                formData.append("package_image", packageFile);
+                formData.append("seal_image", sealFile);
+
+                document.getElementById("result").textContent = "Registering...";
+
+                try {
+                    const response = await fetch("/api/v1/units/register", {
+                        method: "POST",
+                        body: formData
+                    });
+
+                    const data = await response.json();
+                    document.getElementById("result").textContent =
+                        JSON.stringify(data, null, 2);
+
+                } catch (err) {
+                    document.getElementById("result").textContent =
+                        "Error: " + err.message;
+                }
+            }
+        </script>
+    </body>
+    </html>
+    """    
 @app.get("/phone-test", response_class=HTMLResponse)
 async def phone_test_page():
     return """
