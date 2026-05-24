@@ -482,9 +482,9 @@ elif result["trust_score"] >= 35 and inlier_count >= 6:
     result["match_quality"] = "moderate"
 elif result["trust_score"] >= 20:
     result["match_quality"] = "weak"
-else:
-result["match_quality"] = "poor"
-return result
+   else:
+       result["match_quality"] = "poor"
+       return result
 
 
 # ============================================================
