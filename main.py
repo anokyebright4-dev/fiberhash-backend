@@ -464,16 +464,14 @@ def sift_match(master_gray, scan_gray):
     result["homography_found"] = homography_found
 
     if good_match_count > 0:
-    inlier_ratio = inlier_count / good_match_count
-else:
-    inlier_ratio = 0.0
-
-# Phone-friendly R&D scoring:
+        inlier_ratio = inlier_count / good_match_count
+    else:
+        inlier_ratio = 0.0
+        # Phone-friendly R&D scoring:
 # Good matches and geometric inliers matter more than raw keypoint percentage.
 match_score = min(good_match_count / 25, 1.0) * 35
 inlier_score = min(inlier_count / 20, 1.0) * 45
 geometry_score = inlier_ratio * 20
-
 trust_score = match_score + inlier_score + geometry_score
 trust_score = max(0.0, min(100.0, trust_score))
 
