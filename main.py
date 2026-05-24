@@ -476,16 +476,14 @@ trust_score = match_score + inlier_score + geometry_score
 trust_score = max(0.0, min(100.0, trust_score))
 
 result["trust_score"] = round(trust_score, 2)
-
-    if result["trust_score"] >= 60 and inlier_count >= 10:
-        result["match_quality"] = "strong"
-    elif result["trust_score"] >= 35 and inlier_count >= 6:
-        result["match_quality"] = "moderate"
-    elif result["trust_score"] >= 20:
-        result["match_quality"] = "weak"
-    else:
-        result["match_quality"] = "poor"
-
+if result["trust_score"] >= 60 and inlier_count >= 10:
+    result["match_quality"] = "strong"
+elif result["trust_score"] >= 35 and inlier_count >= 6:
+    result["match_quality"] = "moderate"
+elif result["trust_score"] >= 20:
+    result["match_quality"] = "weak"
+else:
+    result["match_quality"] = "poor"
     return result
 
 
