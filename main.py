@@ -1064,7 +1064,7 @@ async def verify_unit(
     try:
         unit = get_unit_record(unit_id)
 
- if not unit:
+    if not unit:
     print("===== UNIT NOT FOUND DEBUG =====")
     print("received unit_id:", unit_id)
     print("unit_id length:", len(unit_id) if unit_id else 0)
