@@ -117,6 +117,29 @@ def init_db():
             created_at TEXT
      )
 """)
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS challenge_cases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            case_id TEXT UNIQUE,
+            order_id TEXT,
+            marketplace_name TEXT,
+            seller_id TEXT,
+            buyer_id TEXT,
+            unit_id TEXT,
+            case_type TEXT,
+            case_status TEXT,
+            trigger_reason TEXT,
+            verification_decision TEXT,
+            package_match INTEGER,
+            seal_match INTEGER,
+            trust_score REAL,
+            risk_level TEXT,
+            recommended_action TEXT,
+            created_at TEXT
+        )
+        """
+    )
     conn.commit()
     conn.close()
 
