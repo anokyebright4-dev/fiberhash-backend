@@ -1249,8 +1249,24 @@ async def verify_unit(
             trust_score,
             ai_risk,
         )
+        case_id = create_challenge_case(
+            order_id=f"ORDER-{unit_id}",
+            marketplace_name="APK_TEST",
+            seller_id="UNKNOWN_SELLER",
+            buyer_id="UNKNOWN_BUYER",
+            unit_id=unit_id,
+            case_type="verification_challenge",
+            trigger_reason="apk_verification_test",
+            verification_decision=decision,
+            package_match=package_match,
+            seal_match=seal_match,
+            trust_score=trust_score,
+            risk_level=ai_risk.get("risk_level"),
+            recommended_action=ai_risk.get("recommended_action"),
+        )
         return {
             "status": "verified",
+            "case_id": case_id,
             "decision": decision,
             "package_match": package_match,
             "seal_match": seal_match,
