@@ -1264,6 +1264,9 @@ async def verify_unit(
             risk_level=ai_risk.get("risk_level"),
             recommended_action=ai_risk.get("recommended_action"),
         )
+        
+        print("challenge case_id:", case_id)
+       
         return {
             "status": "verified",
             "case_id": case_id,
