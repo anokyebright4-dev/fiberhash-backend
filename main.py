@@ -765,7 +765,73 @@ def log_unit_verification_event(unit_id, decision, package_match, seal_match, tr
 
     conn.commit()
     conn.close()
+    
+def create_challenge_case(
+    order_id,
+    marketplace_name,
+    seller_id,
+    buyer_id,
+    unit_id,
+    case_type,
+    trigger_reason,
+    verification_decision,
+    package_match,
+    seal_match,
+    trust_score,
+    risk_level,
+    recommended_action,
+):
+    case_id = str(uuid.uuid4())
 
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        INSERT INTO challenge_cases (
+            case_id,
+            order_id,
+            marketplace_name,
+            seller_id,
+            buyer_id,
+            unit_id,
+            case_type,
+            case_status,
+            trigger_reason,
+            verification_decision,
+            package_match,
+            seal_match,
+            trust_score,
+            risk_level,
+            recommended_action,
+            created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            case_id,
+            order_id,
+            marketplace_name,
+            seller_id,
+            buyer_id,
+            unit_id,
+            case_type,
+            "open",
+            trigger_reason,
+            verification_decision,
+            int(package_match),
+            int(seal_match),
+            trust_score,
+            risk_level,
+            recommended_action,
+            now_iso(),
+        ),
+    )
+
+    conn.commit()
+    conn.close()
+
+    return case_id
 def get_product(product_id):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
