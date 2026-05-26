@@ -1687,7 +1687,79 @@ async def list_challenge_cases(limit: int = 20):
         "count": len(cases),
         "cases": cases,
     }
+@app.patch("/api/v1/challenge-cases/{case_id}/status")
+async def update_challenge_case_status(case_id: str, payload: dict):
+    allowed_statuses = {
+        "in_progress",
+        "reviewed",
+        "closed",
+        "flagged_high_risk"
+    }
 
+    new_status = payload.get("status")
+
+    if not new_status:
+        return {
+            "status": "error",
+            "message": "Missing status field"
+        }
+
+    if new_status not in allowed_statuses:
+        return {
+            "status": "error",
+            "message": f"Invalid status. Allowed values: {list(allowed_statuses)}"
+        }
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    if new_status == "flagged_high_risk":
+        cursor.execute(
+            """
+            UPDATE challenge_cases
+            SET case_status = ?,
+                risk_level = ?,
+                recommended_action = ?
+            WHERE case_id = ?
+            """,
+            (
+                "flagged_high_risk",
+                "high",
+                "Flagged by admin for high-risk review.",
+                case_id
+            )
+        )
+    else:
+        cursor.execute(
+            """
+            UPDATE challenge_cases
+            SET case_status = ?
+            WHERE case_id = ?
+            """,
+            (
+                new_status,
+                case_id
+            )
+        )
+
+    conn.commit()
+
+    if cursor.rowcount == 0:
+        conn.close()
+        return {
+            "status": "error",
+            "message": "Challenge case not found",
+            "case_id": case_id
+        }
+
+    conn.close()
+
+    return {
+        "status": "success",
+        "case_id": case_id,
+        "new_status": new_status
+    }
+    
 @app.post("/api/v1/debug-upload")
 async def debug_upload(request: Request):
     form = await request.form()
