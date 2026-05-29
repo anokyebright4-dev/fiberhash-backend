@@ -93,6 +93,11 @@ def init_db():
         """
         CREATE TABLE IF NOT EXISTS unit_fingerprints (
             unit_id TEXT PRIMARY KEY,
+            order_id TEXT,
+            seller_id TEXT,
+            buyer_id TEXT,
+            marketplace_name TEXT,
+            product_id TEXT,
             product_name TEXT,
             brand TEXT,
             batch_code TEXT,
@@ -655,7 +660,7 @@ def create_product_record(product_name, brand, batch_code, master_image_path, ma
     return product_id
 
 
-def create_unit_record(unit_id,product_name, brand, batch_code, package_image_path, package_image_hash, seal_image_path, seal_image_hash):
+def create_unit_record(unit_id, order_id, seller_id, buyer_id, marketplace_name, product_id, product_name, brand, batch_code, package_image_path, package_image_hash, seal_image_path, seal_image_hash):
     unit_id = unit_id.strip()
     
     conn = sqlite3.connect(DB_PATH)
@@ -665,6 +670,11 @@ def create_unit_record(unit_id,product_name, brand, batch_code, package_image_pa
         """
         INSERT OR REPLACE INTO unit_fingerprints (
             unit_id,
+            order_id,
+            seller_id,
+            buyer_id,
+            marketplace_name,
+            product_id,
             product_name,
             brand,
             batch_code,
@@ -674,10 +684,15 @@ def create_unit_record(unit_id,product_name, brand, batch_code, package_image_pa
             seal_image_hash,
             created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            unit_id,
+            unit_id, 
+            order_id,
+            seller_id,
+            buyer_id,
+            marketplace_name,
+            product_id,
             product_name,
             brand,
             batch_code,
@@ -1366,6 +1381,11 @@ async def register_product(
 
 @app.post("/api/v1/units/register")
 async def register_unit(
+    unit_id: str = Form(...),
+    order_id: str = Form(...),
+    seller_id: str = Form(...),
+    buyer_id: str = Form(...),
+    marketplace_name: str = Form(...),
     product_id: str = Form(...),
     product_name: str = Form(...),
     brand: str = Form(...),
@@ -1469,6 +1489,10 @@ async def register_unit(
         return {
             "status": "registered",
             "unit_id": unit_id,
+            "order_id: order_id,
+            "seller_id: seller_id,
+            "buyer_id: buyer_id,
+            "marketplace_name: marketplace_name,
             "product_id": product_id,
             "product_name": product_name,
             "brand": brand,
