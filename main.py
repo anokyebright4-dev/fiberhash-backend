@@ -1485,6 +1485,11 @@ async def register_unit(
            f.write(seal_bytes) 
 
         unit_id = create_unit_record(
+            unit_id,
+            order_id,
+            seller_id,
+            buyer_id,
+            marketplace_name,
             product_id,
             product_name,
             brand,
