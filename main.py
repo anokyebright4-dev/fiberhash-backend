@@ -1435,6 +1435,10 @@ async def register_unit(
     return {
            "status": "raw_registered",
            "unit_id": unit_id,
+           "order_id": order_id,
+           "seller_id": seller_id,
+           "buyer_id": buyer_id,
+           "marketplace_name": marketplace_name,
            "product_id": product_id,
            "product_name": product_name,
            "brand": brand,
