@@ -1412,10 +1412,15 @@ async def register_unit(
 # CASE 1: RAW UNIT REGISTRATION ONLY
 # This only runs when no package_image and no seal_image file was sent.
     if package_image is None and seal_image is None:
-        existing_unit = get_unit_record(product_id)
+        existing_unit = get_unit_record(unit_id)
 
-        if existing_unit is None:
-            unit_id = create_unit_record(
+    if existing_unit is None:
+        unit_id = create_unit_record(
+            unit_id,
+            order_id,
+            seller_id,
+            buyer_id,
+            marketplace_name,
             product_id,
             product_name,
             brand,
@@ -1423,8 +1428,8 @@ async def register_unit(
             None,
             None,
             None,
-            None
-        )
+            None,
+        )    
         else:
             unit_id = product_id
         return {
