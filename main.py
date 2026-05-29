@@ -1432,7 +1432,7 @@ async def register_unit(
         )    
     else:
             unit_id = unit_id
-        return {
+    return {
            "status": "raw_registered",
            "unit_id": unit_id,
            "product_id": product_id,
