@@ -1209,21 +1209,15 @@ async def verify_unit(
 
         package_scan_bytes = package_encoded.tobytes()
         seal_scan_bytes = seal_encoded.tobytes()
-package_scan_bytes = package_encoded.tobytes()
-seal_scan_bytes = seal_encoded.tobytes()
-package_scan_bytes = package_encoded.tobytes()
-seal_scan_bytes = seal_encoded.tobytes()
+        print("===== VERIFY DEBUG =====")
+        print("unit_id:", unit_id)
+        print("unit record:", unit)
+        print("package_image_path:", unit.get("package_image_path"))
+        print("seal_image_path:", unit.get("seal_image_path"))
+        print("package_scan received:", package_scan is not None)
+        print("seal_scan received:", seal_scan is not None)
+        print("========================")
 
-print("===== VERIFY DEBUG =====")
-print("unit_id:", unit_id)
-print("unit record:", unit)
-print("package_image_path:", unit.get("package_image_path"))
-print("seal_image_path:", unit.get("seal_image_path"))
-print("package_scan received:", package_scan is not None)
-print("seal_scan received:", seal_scan is not None)
-print("========================")
-
-if not unit.get("package_image_path") or not unit.get("seal_image_path"):
 if not unit.get("package_image_path") or not unit.get("seal_image_path"):
     return JSONResponse(
         status_code=400,
