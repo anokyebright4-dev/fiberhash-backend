@@ -1217,19 +1217,19 @@ async def verify_unit(
         print("package_scan received:", package_scan is not None)
         print("seal_scan received:", seal_scan is not None)
         print("========================")
-
-if not unit.get("package_image_path") or not unit.get("seal_image_path"):
-    return JSONResponse(
-        status_code=400,
-        content={
-            "status": "error",
-            "decision": "fail",
-            "package_match": False,
-            "seal_match": False,
-            "trust_score": 0,
-            "message": "Package and seal baselines are not registered for this unit yet."
-        },
-    )
+        
+        if not unit.get("package_image_path") or not unit.get("seal_image_path"):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "decision": "fail",
+                    "package_match": False,
+                    "seal_match": False,
+                    "trust_score": 0,
+                    "message": "Package and seal baselines are not registered for this unit yet."
+                },
+            )
 
         package_result = run_verification(
         master_bytes=read_file_bytes(unit["package_image_path"]),
