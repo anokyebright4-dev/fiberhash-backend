@@ -1503,7 +1503,20 @@ async def register_unit(
            f.write(package_bytes)
 
         with open(seal_file_path, "wb") as f:
-           f.write(seal_bytes) 
+           f.write(seal_bytes)
+        with open(seal_file_path, "wb") as f:
+            f.write(seal_bytes)
+            print("===== REGISTER BASELINE DEBUG =====")
+            print("unit_id:", unit_id)
+            print("package_image received:", package_image is not None)
+            print("seal_image received:", seal_image is not None)
+            print("package_file_path:", package_file_path)
+            print("seal_file_path:", seal_file_path)
+            print("package_hash:", package_hash)
+            print("seal_hash:", seal_hash)
+            print("===================================")
+
+unit_id = create_unit_record(
 
         unit_id = create_unit_record(
             unit_id,
