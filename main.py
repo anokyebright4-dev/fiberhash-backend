@@ -717,6 +717,11 @@ def get_unit_record(unit_id):
         """
         SELECT
             unit_id,
+            order_id,
+            seller_id,
+            buyer_id,
+            marketplace_name,
+            product_id,
             product_name,
             brand,
             batch_code,
@@ -739,14 +744,19 @@ def get_unit_record(unit_id):
 
     return {
         "unit_id": row[0],
-        "product_name": row[1],
-        "brand": row[2],
-        "batch_code": row[3],
-        "package_image_path": row[4],
-        "package_image_hash": row[5],
-        "seal_image_path": row[6],
-        "seal_image_hash": row[7],
-        "created_at": row[8],
+        "order_id": row[1],
+        "seller_id": row[2],
+        "buyer_id": row[3],
+        "marketplace_name": row[4],
+        "product_id": row[5],
+        "product_name": row[6],
+        "brand": row[7],
+        "batch_code": row[8],
+        "package_image_path": row[9],
+        "package_image_hash": row[10],
+        "seal_image_path": row[11],
+        "seal_image_hash": row[12],
+        "created_at": row[13],
     }
 def log_unit_verification_event(unit_id, decision, package_match, seal_match, trust_score, ai_risk):
     conn = sqlite3.connect(DB_PATH)
