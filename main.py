@@ -1286,13 +1286,13 @@ async def verify_unit(
             ai_risk,
         )
         case_id = create_challenge_case(
-            order_id=f"ORDER-{unit_id}",
-            marketplace_name="APK_TEST",
-            seller_id="UNKNOWN_SELLER",
-            buyer_id="UNKNOWN_BUYER",
+            order_id=unit.get("order_id") or f"ORDER-{unit_id}",
+            marketplace_name=unit.get("marketplace_name") or "UNKNOWN_MARKETPLACE",
+            seller_id=unit.get("seller_id") or "UNKNOWN_SELLER",
+            buyer_id=unit.get("buyer_id") or "UNKNOWN_BUYER",
             unit_id=unit_id,
             case_type="verification_challenge",
-            trigger_reason="apk_verification_test",
+            trigger_reason="verification_result",
             verification_decision=decision,
             package_match=package_match,
             seal_match=seal_match,
