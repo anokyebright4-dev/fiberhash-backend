@@ -1516,7 +1516,7 @@ async def register_unit(
             print("seal_hash:", seal_hash)
             print("===================================")
      
-       unit_id = create_unit_record(
+        unit_id = create_unit_record(
             unit_id,
             order_id,
             seller_id,
