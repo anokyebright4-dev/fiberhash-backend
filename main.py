@@ -1709,7 +1709,7 @@ async def list_challenge_cases(limit: int = 20):
     cursor = conn.cursor()
 
     cursor.execute(
-        """"
+        """
     SELECT
         c.case_id,
         c.order_id,
