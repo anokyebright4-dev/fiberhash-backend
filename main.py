@@ -1748,36 +1748,35 @@ async def list_challenge_cases(limit: int = 20):
     for row in rows:
         cases.append(
             {
-                {
-                    "case_id": row[0],
-                    "order_id": row[1],
-                    "marketplace_name": row[2],
-                    "seller_id": row[3],
-                    "buyer_id": row[4],
-                    "unit_id": row[5],
-                    "product_id": row[6],
-                    "product_name": row[7],
-                    "brand": row[8],
-                    "batch_code": row[9],
-                    "case_type": row[10],
-                    "case_status": row[11],
-                    "trigger_reason": row[12],
-                    "verification_decision": row[13],
-                    "package_match": bool(row[14]),
-                    "seal_match": bool(row[15]),
-                    "trust_score": row[16],
-                    "risk_level": row[17],
-                    "recommended_action": row[18],
-                    "created_at": row[19],
-                }
+                "case_id": row[0],
+                "order_id": row[1],
+                "marketplace_name": row[2],
+                "seller_id": row[3],
+                "buyer_id": row[4],
+                "unit_id": row[5],
+                "product_id": row[6],
+                "product_name": row[7],
+                "brand": row[8],
+                "batch_code": row[9],
+                "case_type": row[10],
+                "case_status": row[11],
+                "trigger_reason": row[12],
+                "verification_decision": row[13],
+                "package_match": bool(row[14]),
+                "seal_match": bool(row[15]),
+                "trust_score": row[16],
+                "risk_level": row[17],
+                "recommended_action": row[18],
+                "created_at": row[19],
             }
         )
-
+        
     return {
         "status": "success",
         "count": len(cases),
         "cases": cases,
     }
+    
 @app.patch("/api/v1/challenge-cases/{case_id}/status")
 async def update_challenge_case_status(case_id: str, payload: dict):
     allowed_statuses = {
