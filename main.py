@@ -1709,28 +1709,34 @@ async def list_challenge_cases(limit: int = 20):
     cursor = conn.cursor()
 
     cursor.execute(
-        """
-        SELECT
-            case_id,
-            order_id,
-            marketplace_name,
-            seller_id,
-            buyer_id,
-            unit_id,
-            case_type,
-            case_status,
-            trigger_reason,
-            verification_decision,
-            package_match,
-            seal_match,
-            trust_score,
-            risk_level,
-            recommended_action,
-            created_at
-        FROM challenge_cases
-        ORDER BY created_at DESC
-        LIMIT ?
-        """,
+        """"
+    SELECT
+        c.case_id,
+        c.order_id,
+        c.marketplace_name,
+        c.seller_id,
+        c.buyer_id,
+        c.unit_id,
+        u.product_id,
+        u.product_name,
+        u.brand,
+        u.batch_code,
+        c.case_type,
+        c.case_status,
+        c.trigger_reason,
+        c.verification_decision,
+        c.package_match,
+        c.seal_match,
+        c.trust_score,
+        c.risk_level,
+        c.recommended_action,
+        c.created_at
+    FROM challenge_cases c
+    LEFT JOIN unit_fingerprints u
+    ON c.unit_id = u.unit_id
+    ORDER BY c.created_at DESC
+    LIMIT ?
+    """,
         (limit,),
     )
 
@@ -1742,22 +1748,28 @@ async def list_challenge_cases(limit: int = 20):
     for row in rows:
         cases.append(
             {
-                "case_id": row[0],
-                "order_id": row[1],
-                "marketplace_name": row[2],
-                "seller_id": row[3],
-                "buyer_id": row[4],
-                "unit_id": row[5],
-                "case_type": row[6],
-                "case_status": row[7],
-                "trigger_reason": row[8],
-                "verification_decision": row[9],
-                "package_match": bool(row[10]),
-                "seal_match": bool(row[11]),
-                "trust_score": row[12],
-                "risk_level": row[13],
-                "recommended_action": row[14],
-                "created_at": row[15],
+                {
+                    "case_id": row[0],
+                    "order_id": row[1],
+                    "marketplace_name": row[2],
+                    "seller_id": row[3],
+                    "buyer_id": row[4],
+                    "unit_id": row[5],
+                    "product_id": row[6],
+                    "product_name": row[7],
+                    "brand": row[8],
+                    "batch_code": row[9],
+                    "case_type": row[10],
+                    "case_status": row[11],
+                    "trigger_reason": row[12],
+                    "verification_decision": row[13],
+                    "package_match": bool(row[14]),
+                    "seal_match": bool(row[15]),
+                    "trust_score": row[16],
+                    "risk_level": row[17],
+                    "recommended_action": row[18],
+                    "created_at": row[19],
+                }
             }
         )
 
