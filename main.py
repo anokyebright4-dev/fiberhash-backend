@@ -1781,7 +1781,60 @@ async def request_challenge(payload: dict):
         "challenge_id": challenge_id,
         "challenge_status": challenge_status,
         "message": "Challenge request created successfully.",
-    }    
+    } 
+ @app.patch("/api/v1/challenges/{challenge_id}/seller-response")
+ async def seller_response_to_challenge(challenge_id: str, payload: dict):
+    seller_response = payload.get("seller_response")
+
+    if seller_response not in ["accepted", "rejected"]:
+        return {
+            "status": "error",
+            "message": "seller_response must be accepted or rejected",
+        }
+
+    if seller_response == "accepted":
+        challenge_status = "open_accepted_by_seller"
+    else:
+        challenge_status = "open_rejected_by_seller"
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        UPDATE challenge_requests
+        SET
+            seller_response = ?,
+            response_at = ?,
+            challenge_status = ?
+        WHERE challenge_id = ?
+        """,
+        (
+            seller_response,
+            now_iso(),
+            challenge_status,
+            challenge_id,
+        ),
+    )
+
+    conn.commit()
+    updated_count = cursor.rowcount
+    conn.close()
+
+    if updated_count == 0:
+        return {
+            "status": "error",
+            "message": "Challenge request not found.",
+        }
+
+    return {
+        "status": "success",
+        "challenge_id": challenge_id,
+        "seller_response": seller_response,
+        "challenge_status": challenge_status,
+        "message": "Seller response recorded successfully.",
+    }   
+     
 @app.get("/api/v1/challenge-cases")
 async def list_challenge_cases(limit: int = 20):
     conn = sqlite3.connect(DB_PATH)
