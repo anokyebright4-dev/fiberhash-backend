@@ -1782,8 +1782,9 @@ async def request_challenge(payload: dict):
         "challenge_status": challenge_status,
         "message": "Challenge request created successfully.",
     } 
- @app.patch("/api/v1/challenges/{challenge_id}/seller-response")
- async def seller_response_to_challenge(challenge_id: str, payload: dict):
+
+@app.patch("/api/v1/challenges/{challenge_id}/seller-response")
+async def seller_response_to_challenge(challenge_id: str, payload: dict):
     seller_response = payload.get("seller_response")
 
     if seller_response not in ["accepted", "rejected"]:
