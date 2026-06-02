@@ -1719,7 +1719,67 @@ async def list_events(limit: int = 20):
         "status": "success",
         "events": events,
     }
-    
+@app.post("/api/v1/challenges/request")
+async def request_challenge(payload: dict):
+    challenge_id = str(uuid.uuid4())
+
+    order_id = payload.get("order_id")
+    marketplace_name = payload.get("marketplace_name")
+    seller_id = payload.get("seller_id")
+    buyer_id = payload.get("buyer_id")
+    unit_id = payload.get("unit_id")
+    product_id = payload.get("product_id")
+    challenge_source = payload.get("challenge_source", "buyer")
+    challenge_reason = payload.get("challenge_reason")
+    customer_notes = payload.get("customer_notes", "")
+    challenge_status = "requested"
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        INSERT INTO challenge_requests (
+            challenge_id,
+            order_id,
+            marketplace_name,
+            seller_id,
+            buyer_id,
+            unit_id,
+            product_id,
+            challenge_source,
+            challenge_reason,
+            challenge_status,
+            customer_notes,
+            created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            challenge_id,
+            order_id,
+            marketplace_name,
+            seller_id,
+            buyer_id,
+            unit_id,
+            product_id,
+            challenge_source,
+            challenge_reason,
+            challenge_status,
+            customer_notes,
+            now_iso(),
+        ),
+    )
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "status": "success",
+        "challenge_id": challenge_id,
+        "challenge_status": challenge_status,
+        "message": "Challenge request created successfully.",
+    }    
 @app.get("/api/v1/challenge-cases")
 async def list_challenge_cases(limit: int = 20):
     conn = sqlite3.connect(DB_PATH)
