@@ -159,6 +159,8 @@ def init_db():
             challenge_reason TEXT,
             challenge_status TEXT,
             customer_notes TEXT,
+            seller_response TEXT,
+            response_at TEXT,
             created_at TEXT
             )
             """)
