@@ -145,23 +145,23 @@ def init_db():
         """
     )
     
-   cursor.execute( """
+    cursor.execute( """
        CREATE TABLE IF NOT EXISTS challenge_requests (
-           id INTEGER PRIMARY KEY AUTOINCREMENT,
-           challenge_id TEXT UNIQUE,
-           order_id TEXT,
-           marketplace_name TEXT,
-           seller_id TEXT,
-           buyer_id TEXT,
-           unit_id TEXT,
-           product_id TEXT,
-           challenge_source TEXT,
-           challenge_reason TEXT,
-           challenge_status TEXT,
-           customer_notes TEXT,
-           created_at TEXT
-           )
-           """)
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            challenge_id TEXT UNIQUE,
+            order_id TEXT,
+            marketplace_name TEXT,
+            seller_id TEXT,
+            buyer_id TEXT,
+            unit_id TEXT,
+            product_id TEXT,
+            challenge_source TEXT,
+            challenge_reason TEXT,
+            challenge_status TEXT,
+            customer_notes TEXT,
+            created_at TEXT
+            )
+            """)
     conn.commit()
     conn.close()
 
