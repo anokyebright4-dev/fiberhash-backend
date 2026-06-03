@@ -1782,7 +1782,32 @@ async def request_challenge(payload: dict):
         "challenge_status": challenge_status,
         "message": "Challenge request created successfully.",
     } 
+    
+@app.get("/api/v1/challenges/requests")
+async def list_challenge_requests(limit: int = 20):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
 
+    cursor.execute(
+        """
+        SELECT *
+        FROM challenge_requests
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (limit,)
+    )
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    return {
+        "status": "success",
+        "count": len(rows),
+        "requests": [dict(row) for row in rows]
+    }
+    
 @app.patch("/api/v1/challenges/{challenge_id}/seller-response")
 async def seller_response_to_challenge(challenge_id: str, payload: dict):
     seller_response = payload.get("seller_response")
