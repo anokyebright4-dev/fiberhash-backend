@@ -1343,6 +1343,68 @@ async def verify_unit(
         )
         
         print("challenge case_id:", case_id)
+
+        seller_id = unit.get("seller_id")
+        order_id = unit.get("order_id")
+
+        if seller_id and order_id:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+
+            cursor.execute(
+                """
+                SELECT challenge_id
+                FROM challenge_requests
+                WHERE seller_id = ?
+                  AND order_id = ?
+                  AND challenge_status = 'open_accepted_by_seller'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (seller_id, order_id),
+            )
+
+            challenge_row = cursor.fetchone()
+
+            if challenge_row:
+                if decision == "pass":
+                    cursor.execute(
+                        """
+                        UPDATE seller_trust_metrics
+                        SET
+                            passed_verifications = passed_verifications + 1,
+                            last_updated = ?
+                        WHERE seller_id = ?
+                        """,
+                        (now_iso(), seller_id),
+                    )
+
+                    new_status = "verified_passed"
+                else:
+                    cursor.execute(
+                        """
+                        UPDATE seller_trust_metrics
+                        SET
+                            failed_verifications = failed_verifications + 1,
+                            last_updated = ?
+                        WHERE seller_id = ?
+                        """,
+                        (now_iso(), seller_id),
+                    )
+
+                    new_status = "verified_failed"
+
+                cursor.execute(
+                    """
+                    UPDATE challenge_requests
+                    SET challenge_status = ?
+                    WHERE challenge_id = ?
+                    """,
+                    (new_status, challenge_row[0]),
+                )
+
+            conn.commit()
+            conn.close()
        
         return {
             "status": "verified",
