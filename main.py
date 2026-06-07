@@ -165,8 +165,8 @@ def init_db():
         )
  """) 
             
-     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS seller_trust_metrics (
+    cursor.execute("""
+       CREATE TABLE IF NOT EXISTS seller_trust_metrics (
             seller_id TEXT PRIMARY KEY,
             total_challenges INTEGER DEFAULT 0,
             accepted_challenges INTEGER DEFAULT 0,
