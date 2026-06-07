@@ -162,8 +162,20 @@ def init_db():
             seller_response TEXT,
             response_at TEXT,
             created_at TEXT
-            )
-            """)
+        )
+ """) 
+            
+     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS seller_trust_metrics (
+            seller_id TEXT PRIMARY KEY,
+            total_challenges INTEGER DEFAULT 0,
+            accepted_challenges INTEGER DEFAULT 0,
+            rejected_challenges INTEGER DEFAULT 0,
+            passed_verifications INTEGER DEFAULT 0,
+            failed_verifications INTEGER DEFAULT 0,
+            last_updated TEXT
+         )
+""")       
     conn.commit()
     conn.close()
 
