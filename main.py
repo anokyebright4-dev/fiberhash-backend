@@ -1902,18 +1902,17 @@ if seller_row:
     conn.close()
 
     if updated_count == 0:
-            return {
-                "status": "error",
-                "message": "Challenge request not found.",
-            }
-        
-            return {
-                "status": "success",
-                "challenge_id": challenge_id,
-                "seller_response": seller_response,
-                "challenge_status": challenge_status,
-                "message": "Seller response recorded successfully.",
-            }   
+        return {
+            "status": "error",
+            "message": "Challenge request not found.",
+        }
+    return {
+        "status": "success",
+        "challenge_id": challenge_id,
+        "seller_response": seller_response,
+        "challenge_status": challenge_status,
+        "message": "Seller response recorded successfully.",
+    }   
      
 @app.get("/api/v1/challenge-cases")
 async def list_challenge_cases(limit: int = 20):
