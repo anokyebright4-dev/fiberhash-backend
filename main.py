@@ -1901,7 +1901,7 @@ if seller_row:
 conn.commit()
 conn.close()
 
-if updated_count == 0
+if updated_count == 0:
 return {
     "status": "error",
     "message": "Challenge request not found.",
