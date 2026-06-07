@@ -1907,7 +1907,7 @@ if updated_count == 0:
         "message": "Challenge request not found.",
     }
 
-return {
+    return {
         "status": "success",
         "challenge_id": challenge_id,
         "seller_response": seller_response,
