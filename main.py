@@ -1898,11 +1898,11 @@ if seller_row:
             WHERE seller_id = ?
         """, (now_iso(), seller_id))
 
-        conn.commit()
-        conn.close()
+    conn.commit()
+    conn.close()
 
     if updated_count == 0:
-        return {
+            return {
                  "status": "error",
                  "message": "Challenge request not found.",
          }
