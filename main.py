@@ -1902,10 +1902,10 @@ conn.commit()
 conn.close()
 
 if updated_count == 0:
-return {
-    "status": "error",
-    "message": "Challenge request not found.",
-}
+    return {
+        "status": "error",
+        "message": "Challenge request not found.",
+    }
 
     return {
         "status": "success",
