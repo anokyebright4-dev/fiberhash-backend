@@ -1923,6 +1923,56 @@ async def seller_response_to_challenge(challenge_id: str, payload: dict):
         "challenge_status": challenge_status,
         "message": "Seller response recorded successfully.",
     }
+
+@app.get("/api/v1/sellers/{seller_id}/trust-metrics")
+async def get_seller_trust_metrics(seller_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        SELECT *
+        FROM seller_trust_metrics
+        WHERE seller_id = ?
+        """,
+        (seller_id,),
+    )
+
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return {
+            "status": "success",
+            "seller_id": seller_id,
+            "total_challenges": 0,
+            "accepted_challenges": 0,
+            "rejected_challenges": 0,
+            "passed_verifications": 0,
+            "failed_verifications": 0,
+            "acceptance_rate": 0,
+            "pass_rate": 0,
+            "last_updated": None,
+        }
+
+    data = dict(row)
+
+    total = data.get("total_challenges", 0) or 0
+    accepted = data.get("accepted_challenges", 0) or 0
+    passed = data.get("passed_verifications", 0) or 0
+    failed = data.get("failed_verifications", 0) or 0
+    total_verifications = passed + failed
+
+    acceptance_rate = round((accepted / total) * 100, 2) if total > 0 else 0
+    pass_rate = round((passed / total_verifications) * 100, 2) if total_verifications > 0 else 0
+
+    data["status"] = "success"
+    data["acceptance_rate"] = acceptance_rate
+    data["pass_rate"] = pass_rate
+
+    return data
+    
 @app.get("/api/v1/challenge-cases")
 async def list_challenge_cases(limit: int = 20):
     conn = sqlite3.connect(DB_PATH)
