@@ -1855,9 +1855,51 @@ async def seller_response_to_challenge(challenge_id: str, payload: dict):
         ),
     )
 
-    conn.commit()
-    updated_count = cursor.rowcount
-    conn.close()
+updated_count = cursor.rowcount
+
+cursor.execute(
+    "SELECT seller_id FROM challenge_requests WHERE challenge_id = ?",
+    (challenge_id,)
+)
+seller_row = cursor.fetchone()
+
+if seller_row:
+    seller_id = seller_row[0]
+
+    cursor.execute("""
+        INSERT OR IGNORE INTO seller_trust_metrics (
+            seller_id,
+            total_challenges,
+            accepted_challenges,
+            rejected_challenges,
+            passed_verifications,
+            failed_verifications,
+            last_updated
+        )
+        VALUES (?, 0, 0, 0, 0, 0, ?)
+    """, (seller_id, now_iso()))
+
+    if seller_response == "accepted":
+        cursor.execute("""
+            UPDATE seller_trust_metrics
+            SET
+                total_challenges = total_challenges + 1,
+                accepted_challenges = accepted_challenges + 1,
+                last_updated = ?
+            WHERE seller_id = ?
+        """, (now_iso(), seller_id))
+    else:
+        cursor.execute("""
+            UPDATE seller_trust_metrics
+            SET
+                total_challenges = total_challenges + 1,
+                rejected_challenges = rejected_challenges + 1,
+                last_updated = ?
+            WHERE seller_id = ?
+        """, (now_iso(), seller_id))
+
+conn.commit()
+conn.close()
 
     if updated_count == 0:
         return {
