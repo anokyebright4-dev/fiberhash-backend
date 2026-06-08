@@ -2403,3 +2403,63 @@ async def get_debug_roi(filename: str):
 
     return FileResponse(filepath)
 
+@app.get("/api/v1/admin/seller-trust-dashboard")
+async def seller_trust_dashboard():
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            seller_id,
+            total_challenges,
+            accepted_challenges,
+            rejected_challenges,
+            passed_verifications,
+            failed_verifications,
+            last_updated
+        FROM seller_trust_metrics
+        ORDER BY passed_verifications DESC,
+                 accepted_challenges DESC
+    """)
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    sellers = []
+
+    for row in rows:
+
+        total_challenges = row["total_challenges"] or 0
+        accepted_challenges = row["accepted_challenges"] or 0
+        passed_verifications = row["passed_verifications"] or 0
+
+        acceptance_rate = (
+            accepted_challenges / total_challenges * 100
+            if total_challenges > 0 else 0
+        )
+
+        pass_rate = (
+            passed_verifications / accepted_challenges * 100
+            if accepted_challenges > 0 else 0
+        )
+
+        sellers.append({
+            "seller_id": row["seller_id"],
+            "total_challenges": total_challenges,
+            "accepted_challenges": accepted_challenges,
+            "rejected_challenges": row["rejected_challenges"],
+            "passed_verifications": row["passed_verifications"],
+            "failed_verifications": row["failed_verifications"],
+            "acceptance_rate": round(acceptance_rate, 2),
+            "pass_rate": round(pass_rate, 2),
+            "last_updated": row["last_updated"]
+        })
+
+    return {
+        "status": "success",
+        "seller_count": len(sellers),
+        "sellers": sellers
+    }
+
