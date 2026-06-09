@@ -177,7 +177,7 @@ def init_db():
          )
 """) 
     
-   cursor.execute("""
+    cursor.execute("""
       CREATE TABLE IF NOT EXISTS sellers (
             seller_id TEXT PRIMARY KEY,
             seller_name TEXT NOT NULL,
