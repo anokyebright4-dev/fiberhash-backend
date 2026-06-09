@@ -175,7 +175,18 @@ def init_db():
             failed_verifications INTEGER DEFAULT 0,
             last_updated TEXT
          )
-""")       
+""") 
+    
+   cursor.execute("""
+      CREATE TABLE IF NOT EXISTS sellers (
+            seller_id TEXT PRIMARY KEY,
+            seller_name TEXT NOT NULL,
+            seller_slug TEXT UNIQUE NOT NULL,
+            public_url TEXT NOT NULL,
+            created_at TEXT
+         )
+ """)
+    
     conn.commit()
     conn.close()
 
