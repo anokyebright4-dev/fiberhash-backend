@@ -1997,6 +1997,76 @@ async def seller_response_to_challenge(challenge_id: str, payload: dict):
         "message": "Seller response recorded successfully.",
     }
 
+def make_seller_slug(seller_name: str) -> str:
+    slug = seller_name.lower().strip()
+    slug = re.sub(r"[^a-z0-9]+", "-", slug)
+    slug = slug.strip("-")
+    return slug or "seller"
+
+
+@app.post("/api/v1/sellers/onboard")
+async def onboard_seller(
+    seller_name: str = Form(...),
+):
+    seller_id = f"SELLER-{uuid.uuid4().hex[:8].upper()}"
+    base_slug = make_seller_slug(seller_name)
+    seller_slug = base_slug
+    public_url = f"https://challengeproof.com/seller/{seller_slug}"
+    created_at = datetime.now(timezone.utc).isoformat()
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    counter = 1
+    while True:
+        try:
+            public_url = f"https://challengeproof.com/seller/{seller_slug}"
+            cursor.execute("""
+                INSERT INTO sellers (
+                    seller_id,
+                    seller_name,
+                    seller_slug,
+                    public_url,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                seller_id,
+                seller_name,
+                seller_slug,
+                public_url,
+                created_at
+            ))
+            break
+        except sqlite3.IntegrityError:
+            counter += 1
+            seller_slug = f"{base_slug}-{counter}"
+
+    cursor.execute("""
+        INSERT OR IGNORE INTO seller_trust_metrics (
+            seller_id,
+            total_challenges,
+            accepted_challenges,
+            rejected_challenges,
+            passed_verifications,
+            failed_verifications,
+            last_updated
+        )
+        VALUES (?, 0, 0, 0, 0, 0, ?)
+    """, (seller_id, created_at))
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "status": "success",
+        "seller_id": seller_id,
+        "seller_name": seller_name,
+        "seller_slug": seller_slug,
+        "public_url": public_url,
+        "created_at": created_at
+    }
+
 @app.get("/api/v1/sellers/{seller_id}/trust-metrics")
 async def get_seller_trust_metrics(seller_id: str):
     conn = sqlite3.connect(DB_PATH)
