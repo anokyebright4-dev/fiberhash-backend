@@ -2067,6 +2067,40 @@ async def onboard_seller(
         "public_url": public_url,
         "created_at": created_at
     }
+    
+@app.get("/api/v1/sellers/profile/{seller_slug}")
+async def get_seller_public_profile(seller_slug: str):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        SELECT *
+        FROM sellers
+        WHERE seller_slug = ?
+        """,
+        (seller_slug,),
+    )
+
+    seller = cursor.fetchone()
+    conn.close()
+
+    if not seller:
+        return {
+            "status": "not_found",
+            "message": "Seller profile not found",
+            "seller_slug": seller_slug,
+        }
+
+    return {
+        "status": "success",
+        "seller_id": seller["seller_id"],
+        "seller_name": seller["seller_name"],
+        "seller_slug": seller["seller_slug"],
+        "public_url": seller["public_url"],
+        "created_at": seller["created_at"],
+    }    
 
 @app.get("/api/v1/sellers/{seller_id}/trust-metrics")
 async def get_seller_trust_metrics(seller_id: str):
