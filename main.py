@@ -1820,8 +1820,15 @@ async def request_challenge(payload: dict):
     challenge_source = payload.get("challenge_source", "buyer")
     challenge_reason = payload.get("challenge_reason")
     customer_notes = payload.get("customer_notes", "")
-    challenge_status = "requested"
 
+    if not buyer_id:
+        buyer_id = f"BUYER-PUBLIC-{str(uuid.uuid4())[:8].upper()}"
+
+    if not order_id:
+        order_id = f"PUBLIC-CHALLENGE-{str(uuid.uuid4())[:8].upper()}"
+
+    challenge_status = "requested"
+    
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
