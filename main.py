@@ -199,6 +199,16 @@ def init_db():
             created_at TEXT
          )
  """)
+   cursor.execute("""
+     CREATE TABLE IF NOT EXISTS users (
+            user_id TEXT PRIMARY KEY,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL,
+            seller_id TEXT,
+            created_at TEXT
+        )
+""")
     
     conn.commit()
     conn.close()
