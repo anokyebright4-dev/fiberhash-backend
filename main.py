@@ -1134,6 +1134,81 @@ def create_access_token(data: dict) -> str:
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     
+@app.post("/api/v1/auth/register")
+async def register_user(
+    email: str = Form(...),
+    password: str = Form(...),
+    role: str = Form(...),
+    seller_name: str = Form(None)
+):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT email FROM users WHERE email = ?",
+        (email,)
+    )
+
+    existing = cursor.fetchone()
+
+    if existing:
+        conn.close()
+        return {"success": False, "message": "Email already exists"}
+
+    user_id = str(uuid.uuid4())
+    seller_id = None
+
+    if role == "seller" and seller_name:
+        seller_id = str(uuid.uuid4())
+
+        seller_slug = (
+            seller_name.lower()
+            .replace(" ", "-")
+            .replace(".", "")
+        )
+
+        public_url = f"/seller/{seller_slug}"
+
+        cursor.execute(
+            """
+            INSERT INTO sellers
+            (seller_id, seller_name, seller_slug, public_url, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                seller_id,
+                seller_name,
+                seller_slug,
+                public_url,
+                datetime.utcnow().isoformat()
+            )
+        )
+
+    cursor.execute(
+        """
+        INSERT INTO users
+        (user_id, email, password_hash, role, seller_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            user_id,
+            email,
+            hash_password(password),
+            role,
+            seller_id,
+            datetime.utcnow().isoformat()
+        )
+    )
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "success": True,
+        "user_id": user_id,
+        "seller_id": seller_id
+    }  
+    
 @app.get("/")
 async def root():
     return {
