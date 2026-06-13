@@ -1209,6 +1209,53 @@ async def register_user(
         "seller_id": seller_id
     }  
     
+@app.post("/api/v1/auth/login")
+async def login_user(
+    email: str = Form(...),
+    password: str = Form(...)
+):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        SELECT user_id, email, password_hash, role, seller_id
+        FROM users
+        WHERE email = ?
+        """,
+        (email,)
+    )
+
+    user = cursor.fetchone()
+
+    conn.close()
+
+    if not user:
+        return {
+            "success": False,
+            "message": "Invalid email or password"
+        }
+
+    user_id, email, password_hash, role, seller_id = user
+
+    if not verify_password(password, password_hash):
+        return {
+            "success": False,
+            "message": "Invalid email or password"
+        }
+
+    access_token = create_access_token({
+        "sub": user_id,
+        "role": role
+    })
+
+    return {
+        "success": True,
+        "access_token": access_token,
+        "user_id": user_id,
+        "role": role,
+        "seller_id": seller_id
+    }    
 @app.get("/")
 async def root():
     return {
