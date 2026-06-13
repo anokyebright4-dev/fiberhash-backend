@@ -4,3 +4,6 @@ python-multipart
 opencv-python-headless
 numpy
 Pillow
+passlib[bcrypt]
+python-jose[cryptography]
+bcrypt
