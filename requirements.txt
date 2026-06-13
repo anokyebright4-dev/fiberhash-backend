@@ -6,4 +6,4 @@ numpy
 Pillow
 passlib[bcrypt]
 python-jose[cryptography]
-bcrypt
+bcrypt==4.0.1
