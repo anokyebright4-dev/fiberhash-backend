@@ -12,6 +12,9 @@ import json
 import uuid
 import re
 from datetime import datetime, timezone
+from datetime import timedelta
+from passlib.context import CryptContext
+from jose import jwt, JWTError
 from PIL import Image, ImageOps
 
 
@@ -20,6 +23,15 @@ from PIL import Image, ImageOps
 # ============================================================
 
 app = FastAPI(title="FiberHash / Metalens Authentication API")
+
+SECRET_KEY = "challengeproof_secret_key_change_later"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 1440
+
+pwd_context = CryptContext(
+    schemes=["bcrypt"],
+    deprecated="auto"
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -1094,7 +1106,24 @@ async def get_uploaded_file_bytes(form, possible_names):
 # ============================================================
 # API ENDPOINTS
 # ============================================================
+# ============================================================
+# AUTH HELPERS
+# ============================================================
 
+def hash_password(password: str) -> str:
+    return pwd_context.hash(password)
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
+
+
+def create_access_token(data: dict) -> str:
+    to_encode = data.copy()
+    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    
 @app.get("/")
 async def root():
     return {
