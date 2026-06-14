@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, UploadFile, File, Form
+from fastapi import FastAPI, Request, UploadFile, File, Form, Header, HTTPException, Depends
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 import io
@@ -1134,6 +1134,23 @@ def create_access_token(data: dict) -> str:
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     
+ def require_admin_user(authorization: str = Header(None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing authorization token")
+
+    token = authorization.replace("Bearer ", "")
+
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+
+        if payload.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="Admin access required")
+
+        return payload
+
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")   
+        
 @app.post("/api/v1/auth/register")
 async def register_user(
     email: str = Form(...),
@@ -2320,7 +2337,11 @@ async def get_seller_trust_metrics(seller_id: str):
     return data
     
 @app.get("/api/v1/challenge-cases")
-async def list_challenge_cases(limit: int = 20):
+async def list_challenge_cases(
+    limit: int = 20, 
+    admin_user: dict = 
+    Depends(require_admin_user)
+):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
@@ -2394,7 +2415,12 @@ async def list_challenge_cases(limit: int = 20):
     }
     
 @app.patch("/api/v1/challenge-cases/{case_id}/status")
-async def update_challenge_case_status(case_id: str, payload: dict):
+async def update_challenge_case_status(
+    case_id: str, 
+    payload: dict,
+    admin_user: dict =
+    Depends(require_admin_user)
+    ):
     allowed_statuses = {
         "in_progress",
         "reviewed",
