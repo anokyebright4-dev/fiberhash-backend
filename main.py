@@ -2104,8 +2104,8 @@ async def get_buyer_challenges(buyer_id: str):
         "challenges": [dict(row) for row in rows]
     }  
     
- @app.get("/api/v1/challenges/detail/{challenge_id}")
- async def get_challenge_detail(challenge_id: str):
+@app.get("/api/v1/challenges/detail/{challenge_id}")
+async def get_challenge_detail(challenge_id: str):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
