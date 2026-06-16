@@ -2102,7 +2102,36 @@ async def get_buyer_challenges(buyer_id: str):
         "status": "success",
         "count": len(rows),
         "challenges": [dict(row) for row in rows]
-    }    
+    }  
+    
+ @app.get("/api/v1/challenges/detail/{challenge_id}")
+ async def get_challenge_detail(challenge_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        SELECT *
+        FROM challenge_requests
+        WHERE challenge_id = ?
+        """,
+        (challenge_id,)
+    )
+
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return {
+            "status": "error",
+            "message": "challenge not found"
+        }
+
+    return {
+        "status": "success",
+        "challenge": dict(row)
+    }   
 @app.patch("/api/v1/challenges/{challenge_id}/seller-response")
 async def seller_response_to_challenge(challenge_id: str, payload: dict):
     seller_response = payload.get("seller_response")
