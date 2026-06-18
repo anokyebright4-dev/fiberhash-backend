@@ -1159,7 +1159,7 @@ def require_admin_user(request: Request):
 
         return payload
 
-    except Exception:
+    except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")   
         
 @app.post("/api/v1/auth/register")
