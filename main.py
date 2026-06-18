@@ -2786,18 +2786,23 @@ async def seller_trust_dashboard():
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT
-            seller_id,
-            total_challenges,
-            accepted_challenges,
-            rejected_challenges,
-            passed_verifications,
-            failed_verifications,
-            last_updated
-        FROM seller_trust_metrics
-        ORDER BY passed_verifications DESC,
-                 accepted_challenges DESC
-    """)
+    SELECT
+        s.seller_id,
+        s.seller_name,
+        s.seller_slug,
+        COALESCE(m.total_challenges, 0) AS total_challenges,
+        COALESCE(m.accepted_challenges, 0) AS accepted_challenges,
+        COALESCE(m.rejected_challenges, 0) AS rejected_challenges,
+        COALESCE(m.passed_verifications, 0) AS passed_verifications,
+        COALESCE(m.failed_verifications, 0) AS failed_verifications,
+        m.last_updated
+    FROM sellers s
+    LEFT JOIN seller_trust_metrics m
+        ON s.seller_id = m.seller_id
+    ORDER BY
+        COALESCE(m.passed_verifications, 0) DESC,
+        COALESCE(m.accepted_challenges, 0) DESC
+""")
 
     rows = cursor.fetchall()
     conn.close()
@@ -2821,6 +2826,8 @@ async def seller_trust_dashboard():
         )
 
         sellers.append({
+            "seller_name": row["seller_name"],
+            "seller_slug": row["seller_slug"],
             "seller_id": row["seller_id"],
             "total_challenges": total_challenges,
             "accepted_challenges": accepted_challenges,
