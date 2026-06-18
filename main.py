@@ -1355,7 +1355,7 @@ def crop_center_square(img):
 
 def isolate_square_roi(img):
     if img is None or getattr(img, "size", 0) == 0:
-    raise HTTPException(
+        raise HTTPException(
         status_code=400,
         detail="Invalid or empty image received before ROI isolation"
     )
