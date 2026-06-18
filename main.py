@@ -255,7 +255,8 @@ def decode_image(image_bytes: bytes):
 
         return bgr
 
-    except Exception:
+    except Exception as e:
+        print("IMAGE DECODE FAILED:", str(e))
         return None
 
 def normalize_image(image, target_size=1024):
