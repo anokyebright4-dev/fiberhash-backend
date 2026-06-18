@@ -1354,6 +1354,11 @@ def crop_center_square(img):
 
 
 def isolate_square_roi(img):
+    if img is None or getattr(img, "size", 0) == 0:
+    raise HTTPException(
+        status_code=400,
+        detail="Invalid or empty image received before ROI isolation"
+    )
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     edges = cv2.Canny(blurred, 50, 150)
