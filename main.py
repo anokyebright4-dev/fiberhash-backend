@@ -1398,11 +1398,31 @@ def isolate_square_roi(img):
 
 
 def isolate_unprinted_package_surface(img):
-    return isolate_square_roi(img)
+    try:
+        roi = isolate_square_roi(img)
 
+        if roi is None or getattr(roi, "size", 0) == 0:
+            return img
+
+        return roi
+
+    except Exception as e:
+        print("Package ROI isolation failed, using original image:", str(e))
+        return img
 
 def isolate_seal_surface(img):
-    return isolate_square_roi(img)
+    try:
+        roi = isolate_square_roi(img)
+
+        if roi is None or getattr(roi, "size", 0) == 0:
+            return img
+
+        return roi
+
+    except Exception as e:
+        print("Seal ROI isolation failed, using original image:", str(e))
+        return img
+    
     
 @app.post("/api/v1/units/verify")
 async def verify_unit(
