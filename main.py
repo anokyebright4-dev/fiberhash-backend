@@ -1151,9 +1151,6 @@ def require_admin_user(request: Request):
 
     if not token:
         raise HTTPException(status_code=401, detail="Missing authorization token")
-
-    return token
-
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
 
