@@ -1133,7 +1133,12 @@ def create_access_token(data: dict) -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-def require_admin_user(authorization: str = Header(None, alias="Authorization")):
+def require_admin_user(request: Request):
+    authorization = (
+        request.headers.get("authorization")
+        or request.headers.get("Authorization")
+    )
+
     if not authorization:
         raise HTTPException(status_code=401, detail="Missing authorization token")
 
@@ -1143,6 +1148,11 @@ def require_admin_user(authorization: str = Header(None, alias="Authorization"))
         raise HTTPException(status_code=401, detail="Missing authorization token")
 
     token = authorization.split(" ", 1)[1].strip()
+
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing authorization token")
+
+    return token
 
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
