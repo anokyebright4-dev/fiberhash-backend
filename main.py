@@ -3,7 +3,7 @@ from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 import io
 import cv2
-import numpy as npn
+import numpy as np
 import uvicorn
 import sqlite3
 import hashlib
