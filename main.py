@@ -2125,12 +2125,12 @@ async def get_buyer_challenges(buyer_id: str):
 
     cursor.execute(
         """
-        SELECT *
+        SELECT 
             cr.*,
             s.seller_name
         FROM challenge_requests cr
         LEFT JOIN sellers s
-            ON cr.seller_id = ?
+            ON cr.seller_id = s.seller_id
         WHERE cr.buyer_id = ?
         ORDER BY cr.created_at DESC
         """,
@@ -2154,7 +2154,7 @@ async def get_challenge_detail(challenge_id: str):
 
     cursor.execute(
         """
-        SELECT *
+        SELECT 
             cr.*,
             s.seller_name
         FROM challenge_requests cr
