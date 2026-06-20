@@ -2452,6 +2452,7 @@ async def list_challenge_cases(
         """
     SELECT
         c.case_id,
+        s.seller_name,
         c.order_id,
         c.marketplace_name,
         c.seller_id,
@@ -2474,6 +2475,8 @@ async def list_challenge_cases(
     FROM challenge_cases c
     LEFT JOIN unit_fingerprints u
     ON c.unit_id = u.unit_id
+    LEFT JOIN sellers s
+        ON c.sellers_id = s.seller_id
     ORDER BY c.created_at DESC
     LIMIT ?
     """,
@@ -2489,25 +2492,26 @@ async def list_challenge_cases(
         cases.append(
             {
                 "case_id": row[0],
-                "order_id": row[1],
-                "marketplace_name": row[2],
-                "seller_id": row[3],
-                "buyer_id": row[4],
-                "unit_id": row[5],
-                "product_id": row[6],
-                "product_name": row[7],
-                "brand": row[8],
-                "batch_code": row[9],
-                "case_type": row[10],
-                "case_status": row[11],
-                "trigger_reason": row[12],
-                "verification_decision": row[13],
-                "package_match": bool(row[14]),
-                "seal_match": bool(row[15]),
-                "trust_score": row[16],
-                "risk_level": row[17],
-                "recommended_action": row[18],
-                "created_at": row[19],
+                "seller_name": row[1]
+                "order_id": row[2],
+                "marketplace_name": row[3],
+                "seller_id": row[4],
+                "buyer_id": row[5],
+                "unit_id": row[6],
+                "product_id": row[7],
+                "product_name": row[8],
+                "brand": row[9],
+                "batch_code": row[10],
+                "case_type": row[11],
+                "case_status": row[12],
+                "trigger_reason": row[13],
+                "verification_decision": row[14],
+                "package_match": bool(row[15]),
+                "seal_match": bool(row[16]),
+                "trust_score": row[17],
+                "risk_level": row[18],
+                "recommended_action": row[19],
+                "created_at": row[20],
             }
         )
         
