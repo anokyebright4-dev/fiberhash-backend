@@ -2492,7 +2492,7 @@ async def list_challenge_cases(
         cases.append(
             {
                 "case_id": row[0],
-                "seller_name": row[1]
+                "seller_name": row[1],
                 "order_id": row[2],
                 "marketplace_name": row[3],
                 "seller_id": row[4],
