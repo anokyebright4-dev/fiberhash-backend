@@ -2476,7 +2476,7 @@ async def list_challenge_cases(
     LEFT JOIN unit_fingerprints u
     ON c.unit_id = u.unit_id
     LEFT JOIN sellers s
-        ON c.sellers_id = s.seller_id
+        ON c.seller_id = s.seller_id
     ORDER BY c.created_at DESC
     LIMIT ?
     """,
