@@ -159,7 +159,7 @@ def init_db():
     )
     
     cursor.execute( """
-       CREATE TABLE IF NOT EXISTS challenge_requests (
+       CREATE TABLE IF NOT EXISTS challenges/requestss (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             challenge_id TEXT UNIQUE,
             order_id TEXT,
@@ -2099,8 +2099,12 @@ async def list_challenge_requests(limit: int = 20):
 
     cursor.execute(
         """
-        SELECT *
-        FROM challenge_requests
+        SELECT 
+            cr.*,
+            s.seller_name
+        FROM challenge_requests cr
+        LEFT JOIN sellers s
+            ON cr.seller_id = s.seller_id
         ORDER BY created_at DESC
         LIMIT ?
         """,
