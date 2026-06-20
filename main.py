@@ -159,7 +159,7 @@ def init_db():
     )
     
     cursor.execute( """
-       CREATE TABLE IF NOT EXISTS challenges/requestss (
+       CREATE TABLE IF NOT EXISTS challenge_requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             challenge_id TEXT UNIQUE,
             order_id TEXT,
