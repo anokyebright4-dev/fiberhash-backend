@@ -2393,12 +2393,24 @@ async def get_seller_public_profile(seller_slug: str):
 
     cursor.execute(
         """
-        SELECT *
-        FROM sellers
-        WHERE seller_slug = ?
-        """,
-        (seller_slug,),
-    )
+        SELECT
+           s.seller_id,
+           s.seller_name,
+           s.seller_slug,
+           s.public_url,
+           s.created_at,
+           COALESCE(m.total_challenges, 0) AS total_challenges,
+           COALESCE(m.accepted_challenges, 0) AS accepted_challenges,
+           COALESCE(m.rejected_challenges, 0) AS rejected_challenges,
+           COALESCE(m.passed_verifications, 0) AS passed_verifications,
+           COALESCE(m.failed_verifications, 0) AS failed_verifications
+    FROM sellers s
+    LEFT JOIN seller_trust_metrics m
+        ON s.seller_id = m.seller_id
+    WHERE s.seller_slug = ?
+    """,
+    (seller_slug,),
+)
 
     seller = cursor.fetchone()
     conn.close()
@@ -2417,7 +2429,13 @@ async def get_seller_public_profile(seller_slug: str):
         "seller_slug": seller["seller_slug"],
         "public_url": seller["public_url"],
         "created_at": seller["created_at"],
-    }    
+        "total_challenges": seller["total_challenges"],
+        "accepted_challenges": seller["accepted_challenges"],
+        "rejected_challenges": seller["rejected_challenges"],
+        "passed_verifications": seller["passed_verifications"],
+        "failed_verifications": seller["failed_verifications"],
+    }   
+
 
 @app.get("/api/v1/sellers/{seller_id}/trust-metrics")
 async def get_seller_trust_metrics(seller_id: str):
