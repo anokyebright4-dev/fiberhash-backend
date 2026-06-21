@@ -2356,6 +2356,35 @@ async def onboard_seller(
         "created_at": created_at
     }
     
+@app.get("/api/v1/sellers")
+async def list_sellers():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            seller_id,
+            seller_name,
+            seller_slug,
+            public_url,
+            created_at
+        FROM sellers
+        ORDER BY created_at DESC
+    """)
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    sellers = []
+    for row in rows:
+        sellers.append(dict(row))
+
+    return {
+        "status": "success",
+        "count": len(sellers),
+        "sellers": sellers
+    }    
 @app.get("/api/v1/sellers/profile/{seller_slug}")
 async def get_seller_public_profile(seller_slug: str):
     conn = sqlite3.connect(DB_PATH)
