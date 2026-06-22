@@ -703,6 +703,52 @@ def calculate_ai_risk(package_match, seal_match, package_result, seal_result):
 # DATABASE HELPERS
 # ============================================================
 
+def add_timeline_event(
+    challenge_id,
+    event_type,
+    event_title,
+    event_description="",
+    actor_type="",
+    actor_id="",
+    old_status="",
+    new_status=""
+):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        INSERT INTO challenge_timeline (
+            event_id,
+            challenge_id,
+            event_type,
+            event_title,
+            event_description,
+            actor_type,
+            actor_id,
+            old_status,
+            new_status,
+            created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(uuid.uuid4()),
+            challenge_id,
+            event_type,
+            event_title,
+            event_description,
+            actor_type,
+            actor_id,
+            old_status,
+            new_status,
+            now_iso()
+        )
+    )
+
+    conn.commit()
+    conn.close()
+    
 def create_product_record(product_name, brand, batch_code, master_image_path, master_image_hash):
     product_id = str(uuid.uuid4())
 
@@ -2096,6 +2142,17 @@ async def request_challenge(payload: dict):
 
     conn.commit()
     conn.close()
+    
+    add_timeline_event(
+         challenge_id=challenge_id,
+         event_type="CHALLENGE_REQUESTED",
+         event_title="Challenge requested",
+         event_description=f"Challenge requested for order {order_id}",
+         actor_type="buyer",
+         actor_id=buyer_id,
+         old_status="",
+         new_status=challenge_status
+    )
 
     return {
         "status": "success",
@@ -2291,6 +2348,16 @@ async def seller_response_to_challenge(challenge_id: str, payload: dict):
             "message": "Challenge request not found.",
         }
 
+    add_timeline_event(
+         challenge_id=challenge_id,
+         event_type="SELLER_RESPONSE",
+         event_title="Seller responded to challenge",
+         event_description=f"Seller response: {seller_response}",
+         actor_type="seller",
+         actor_id=seller_id,
+         old_status="requested",
+         new_status=challenge_status
+    )
     return {
         "status": "success",
         "challenge_id": challenge_id,
