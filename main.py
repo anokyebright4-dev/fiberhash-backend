@@ -2614,6 +2614,7 @@ async def list_challenge_cases(
         """
     SELECT
         c.case_id,
+        cr.challenge_id,
         s.seller_name,
         c.order_id,
         c.marketplace_name,
@@ -2637,6 +2638,8 @@ async def list_challenge_cases(
     FROM challenge_cases c
     LEFT JOIN unit_fingerprints u
     ON c.unit_id = u.unit_id
+    LEFT JOIN challenge_requests cr
+        ON c.order_id = cr.order_id
     LEFT JOIN sellers s
         ON c.seller_id = s.seller_id
     ORDER BY c.created_at DESC
