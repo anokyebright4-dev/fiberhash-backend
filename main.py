@@ -176,8 +176,21 @@ def init_db():
             response_at TEXT,
             created_at TEXT
         )
- """) 
-            
+ """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS challenge_timeline (
+            event_id TEXT PRIMARY KEY,
+            challenge_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            event_title TEXT NOT NULL,
+            event_description TEXT,
+            actor_type TEXT,
+            actor_id TEXT,
+            old_status TEXT,
+            new_status TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+         )
+ """)
     cursor.execute("""
        CREATE TABLE IF NOT EXISTS seller_trust_metrics (
             seller_id TEXT PRIMARY KEY,
