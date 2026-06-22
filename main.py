@@ -2372,6 +2372,41 @@ def make_seller_slug(seller_name: str) -> str:
     slug = slug.strip("-")
     return slug or "seller"
 
+@app.get("/api/v1/challenges/{challenge_id}/timeline")
+async def get_challenge_timeline(challenge_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        SELECT
+            event_id,
+            challenge_id,
+            event_type,
+            event_title,
+            event_description,
+            actor_type,
+            actor_id,
+            old_status,
+            new_status,
+            created_at
+        FROM challenge_timeline
+        WHERE challenge_id = ?
+        ORDER BY created_at ASC
+        """,
+        (challenge_id,)
+    )
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    return {
+        "status": "success",
+        "challenge_id": challenge_id,
+        "count": len(rows),
+        "timeline": [dict(row) for row in rows]
+    }
 
 @app.post("/api/v1/sellers/onboard")
 async def onboard_seller(
