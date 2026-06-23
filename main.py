@@ -1935,6 +1935,7 @@ async def register_unit(
             "seal_hash": seal_hash,
             "message": "Package and seal baselines registered successfully."
         }
+        
 @app.post("/api/v1/products/verify")
 async def verify_registered_product(
     product_id: str = Form(...),
@@ -2004,7 +2005,59 @@ async def verify_registered_product(
             },
         )
 
+@app.get("/api/v1/products")
+async def list_products():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
 
+    cursor.execute(
+        """
+        SELECT
+            u.product_id,
+            u.product_name,
+            u.brand,
+            u.seller_id,
+            s.seller_name,
+            COUNT(u.unit_id) AS units_registered,
+            MAX(u.created_at) AS latest_registered_at
+        FROM unit_fingerprints u
+        LEFT JOIN sellers s
+            ON u.seller_id = s.seller_id
+        GROUP BY
+            u.product_id,
+            u.product_name,
+            u.brand,
+            u.seller_id,
+            s.seller_name
+        ORDER BY latest_registered_at DESC
+        """
+    )
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    products = []
+
+    for row in rows:
+        products.append(
+            {
+                "product_id": row["product_id"],
+                "product_name": row["product_name"],
+                "brand": row["brand"],
+                "seller_id": row["seller_id"],
+                "seller_name": row["seller_name"],
+                "units_registered": row["units_registered"],
+                "latest_registered_at": row["latest_registered_at"],
+            }
+        )
+
+    return {
+        "status": "success",
+        "count": len(products),
+        "products": products,
+    }
+    
 @app.get("/api/v1/products/{product_id}")
 async def get_product_by_id(product_id: str):
     product = get_product(product_id)
