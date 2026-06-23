@@ -2536,6 +2536,12 @@ async def get_seller_public_profile(seller_slug: str):
             "message": "Seller profile not found",
             "seller_slug": seller_slug,
         }
+    total = seller["passed_verifications"] + seller["failed_verifications"]
+
+    if total > 0:
+    trust_score = round((seller["passed_verifications"] / total) * 100)
+else:
+    trust_score = 100
 
     return {
         "status": "success",
@@ -2549,6 +2555,7 @@ async def get_seller_public_profile(seller_slug: str):
         "rejected_challenges": seller["rejected_challenges"],
         "passed_verifications": seller["passed_verifications"],
         "failed_verifications": seller["failed_verifications"],
+        "trust_score": trust_score,
     }   
 
 
