@@ -2540,8 +2540,8 @@ async def get_seller_public_profile(seller_slug: str):
 
     if total > 0:
         trust_score = round((seller["passed_verifications"] / total) * 100)
-else:
-    trust_score = 100
+    else:
+        trust_score = 100
 
     return {
         "status": "success",
