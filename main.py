@@ -2014,14 +2014,23 @@ async def list_products():
     cursor.execute(
         """
         SELECT
-            id AS product_id,
-            product_name,
-            brand,
-            batch_code,
-            master_image_hash,
-            created_at
-        FROM products
-        ORDER BY created_at DESC
+            u.product_id,
+            u.product_name,
+            u.brand,
+            u.seller_id,
+            s.seller_name,
+            COUNT(u.unit_id) AS units_registered,
+            MAX(u.created_at) AS latest_registered_at
+        FROM unit_fingerprints u
+        LEFT JOIN sellers s
+            ON u.seller_id = s.seller_id
+        GROUP BY
+            u.product_id,
+            u.product_name,
+            u.brand,
+            u.seller_id,
+            s.seller_name
+        ORDER BY latest_registered_at DESC
         """
     )
 
@@ -2036,9 +2045,10 @@ async def list_products():
                 "product_id": row["product_id"],
                 "product_name": row["product_name"],
                 "brand": row["brand"],
-                "batch_code": row["batch_code"],
-                "master_image_hash": row["master_image_hash"],
-                "created_at": row["created_at"],
+                "seller_id": row["seller_id"],
+                "seller_name": row["seller_name"],
+                "units_registered": row["units_registered"],
+                "latest_registered_at": row["latest_registered_at"],
             }
         )
 
