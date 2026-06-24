@@ -1936,6 +1936,71 @@ async def register_unit(
             "message": "Package and seal baselines registered successfully."
         }
         
+@app.post("/api/v1/units/brand-baseline-register")
+async def brand_baseline_register_unit(
+    unit_id: str = Form(...),
+    seller_id: str = Form(...),
+    product_id: str = Form(...),
+    product_name: str = Form(...),
+    brand: str = Form(...),
+    batch_code: str = Form(...),
+):
+    order_id = "BRAND-BASELINE"
+    buyer_id = "N/A"
+    marketplace_name = "BRAND_REGISTRY"
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    cursor.execute(
+        """
+        INSERT OR REPLACE INTO unit_fingerprints (
+            unit_id,
+            order_id,
+            seller_id,
+            buyer_id,
+            marketplace_name,
+            product_id,
+            product_name,
+            brand,
+            batch_code,
+            created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            unit_id,
+            order_id,
+            seller_id,
+            buyer_id,
+            marketplace_name,
+            product_id,
+            product_name,
+            brand,
+            batch_code,
+            now,
+        ),
+    )
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "status": "brand_baseline_registered",
+        "unit_id": unit_id,
+        "seller_id": seller_id,
+        "product_id": product_id,
+        "product_name": product_name,
+        "brand": brand,
+        "batch_code": batch_code,
+        "order_id": order_id,
+        "buyer_id": buyer_id,
+        "marketplace_name": marketplace_name,
+        "message": "Brand baseline unit registered. Package and seal baselines can be captured next.",
+    }        
+    
 @app.post("/api/v1/products/verify")
 async def verify_registered_product(
     product_id: str = Form(...),
