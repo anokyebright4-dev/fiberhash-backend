@@ -2010,7 +2010,17 @@ async def register_brand_baseline_images(
     seal_capture_context: str = Form("brand_baseline"),
 ):   
     try:
-        existing = get_unit_fingerprint(unit_id)
+        conn = sqlite3.connect(DB_PATH)
+conn.row_factory = sqlite3.Row
+cursor = conn.cursor()
+
+cursor.execute(
+    "SELECT * FROM unit_fingerprints WHERE unit_id = ?",
+    (unit_id,),
+)
+
+existing = cursor.fetchone()
+conn.close()
 
         if existing is None:
             return JSONResponse(
