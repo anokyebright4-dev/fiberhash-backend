@@ -2001,8 +2001,8 @@ async def brand_baseline_register_unit(
         "message": "Brand baseline unit registered. Package and seal baselines can be captured next.",
     } 
     
- @app.post("/api/v1/units/brand-baseline-images")
- async def register_brand_baseline_images(
+@app.post("/api/v1/units/brand-baseline-images")
+async def register_brand_baseline_images(
     unit_id: str = Form(...),
     package_image: UploadFile = File(...),
     seal_image: UploadFile = File(...),
