@@ -1999,7 +1999,78 @@ async def brand_baseline_register_unit(
         "buyer_id": buyer_id,
         "marketplace_name": marketplace_name,
         "message": "Brand baseline unit registered. Package and seal baselines can be captured next.",
-    }        
+    } 
+    
+ @app.post("/api/v1/units/brand-baseline-images")
+ async def register_brand_baseline_images(
+    unit_id: str = Form(...),
+    package_image: UploadFile = File(...),
+    seal_image: UploadFile = File(...),
+    package_capture_context: str = Form("brand_baseline"),
+    seal_capture_context: str = Form("brand_baseline"),
+):   
+    try:
+        existing = get_unit_fingerprint(unit_id)
+
+        if existing is None:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "status": "error",
+                    "message": "Brand baseline unit not found. Register the brand baseline unit first.",
+                    "unit_id": unit_id,
+                },
+            )
+
+        package_bytes = await package_image.read()
+        seal_bytes = await seal_image.read()
+
+        package_hash = compute_image_hash(package_bytes)
+        seal_hash = compute_image_hash(seal_bytes)
+
+        now = datetime.now(timezone.utc).isoformat()
+
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            UPDATE unit_fingerprints
+            SET
+                package_image_hash = ?,
+                seal_image_hash = ?,
+                created_at = ?
+            WHERE unit_id = ?
+            """,
+            (
+                package_hash,
+                seal_hash,
+                now,
+                unit_id,
+            ),
+        )
+
+        conn.commit()
+        conn.close()
+
+        return {
+            "status": "brand_baseline_images_registered",
+            "unit_id": unit_id,
+            "package_hash": package_hash,
+            "seal_hash": seal_hash,
+            "package_capture_context": package_capture_context,
+            "seal_capture_context": seal_capture_context,
+            "message": "Brand package and seal baseline images registered successfully.",
+        }
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": str(e),
+            },
+        )
     
 @app.post("/api/v1/products/verify")
 async def verify_registered_product(
