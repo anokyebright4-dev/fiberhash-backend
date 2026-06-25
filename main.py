@@ -2035,8 +2035,8 @@ async def register_brand_baseline_images(
         package_bytes = await package_image.read()
         seal_bytes = await seal_image.read()
 
-        package_hash = compute_image_hash(package_bytes)
-        seal_hash = compute_image_hash(seal_bytes)
+        package_hash = hashlib.sha256(package_bytes).hexdigest()
+        seal_hash = hashlib.sha256(seal_bytes).hexdigest()
 
         now = datetime.now(timezone.utc).isoformat()
 
