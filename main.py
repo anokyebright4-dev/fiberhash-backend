@@ -2037,7 +2037,22 @@ async def register_brand_baseline_images(
 
         package_hash = hashlib.sha256(package_bytes).hexdigest()
         seal_hash = hashlib.sha256(seal_bytes).hexdigest()
+        uploads_dir = "uploads"
+        os.makedirs(uploads_dir, exist_ok=True)
 
+        package_file_path = os.path.join(
+            uploads_dir,
+            f"{package_hash}.jpg",
+        )
+        seal_file_path = os.path.join(
+            uploads_dir,
+            f"{seal_hash}.jpg",
+        )
+        with open(package_file_path, "wb") as package_file:
+            package_file.write(package_bytes)
+        with open(seal_file_path, "wb") as seal_file:
+            seal_file.write(seal_bytes)
+ 
         now = datetime.now(timezone.utc).isoformat()
 
         conn = sqlite3.connect(DB_PATH)
@@ -2047,12 +2062,16 @@ async def register_brand_baseline_images(
             """
             UPDATE unit_fingerprints
             SET
+                package_image_path = ?,
+                seal_image_path = ?,
                 package_image_hash = ?,
                 seal_image_hash = ?,
                 created_at = ?
             WHERE unit_id = ?
             """,
             (
+                package_file_path,
+                seal_file_path,
                 package_hash,
                 seal_hash,
                 now,
