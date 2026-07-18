@@ -1336,14 +1336,33 @@ async def login_user(
         "sub": user_id,
         "role": role
     })
+    
+    seller_name = None
+    if seller_id:
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT seller_name
+        FROM sellers
+        WHERE seller_id = ?
+    """, (seller_id,))
+
+    row = cursor.fetchone()
+    conn.close()
+
+    if row:
+        seller_name = row[0]
 
     return {
         "success": True,
         "access_token": access_token,
         "user_id": user_id,
         "role": role,
-        "seller_id": seller_id
-    }    
+        "seller_id": seller_id,
+        "seller_name": seller_name
+    }  
+    
 @app.get("/")
 async def root():
     return {
