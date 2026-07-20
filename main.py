@@ -2658,7 +2658,7 @@ async def onboard_seller(
              created_at
          FROM sellers
          WHERE seller_id = ?
-         """
+         """,
          (seller_id,)
     )
     row = cursor.fetchone()
