@@ -2650,44 +2650,25 @@ async def onboard_seller(
     cursor = conn.cursor()
     
     cursor.execute(
-        "SELECT seller_name FROM users JOIN sellers ON users.seller_id = sellers.seller_id WHERE users.seller_id = ?",
-        (seller_id,)
+        """
+        SELECT
+             seller_name,
+             seller_slug,
+             public_url,
+             created_at
+         FROM sellers
+         WHERE seller_id = ?
+         """
+         (seller_id,)
     )
     row = cursor.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Seller not found")
-        seller_name = row[0]
-        base_slug = make_seller_slug(seller_name)
-        seller_slug = base_slug
+        seller_name = row["seller_name"]
+        seller_slug = row["seller_slug"]
+        public_url = row["public_url"]
+        created_at = row["created_at"]
         
-        cursor.execute(
-            "SELECT public_url, seller_slug FROM sellers WHERE seller_id = ?",
-            (seller_id,)
-        )
-        existing = cursor.fetchone()
-        conn.close()
-        if existing:
-            public_url = existing[0]
-            seller_slug = existing[1]
-        else:
-            public_url = f"https://challengeproof.com/seller/{seller_slug}"
-            created_at = datetime.now(timezone.utc).isoformat()
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
-            
-        cursor.execute("""
-            INSERT OR IGNORE INTO seller_trust_metrics (
-            seller_id,
-            total_challenges,
-            accepted_challenges,
-            rejected_challenges,
-            passed_verifications,
-            failed_verifications,
-            last_updated
-            )
-            VALUES (?, 0, 0, 0, 0, 0, ?)
-            """, (seller_id, created_at))
-        conn.commit()
         conn.close()
         
         return {
