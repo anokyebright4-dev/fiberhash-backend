@@ -2671,6 +2671,14 @@ async def onboard_seller(
         
         conn.close()
         
+        print({
+            "status": "success",
+            "seller_id": seller_id,
+            "seller_name": seller_name,
+            "seller_slug": seller_slug,
+            "public_url": public_url,
+            "created_at": created_at,
+        })
         return {
             "status": "success",
             "seller_id": seller_id,
