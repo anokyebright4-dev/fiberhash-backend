@@ -2664,7 +2664,7 @@ async def onboard_seller(
     
     row = cursor.fetchone()
     
-        print("===== ONBOARD SELLER =====")
+    print("===== ONBOARD SELLER =====")
         print("seller_id:", seller_id)
         print("row:", row)
     
