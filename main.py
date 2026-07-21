@@ -2670,18 +2670,19 @@ async def onboard_seller(
     print("row:", row)
     
     if not row:
-        raise HTTPException(status_code=404, detail="Seller not found")
-        seller_name = row["seller_name"]
-        seller_slug = row["seller_slug"]
-        public_url = row["public_url"]
-        created_at = row["created_at"]
-        
-        print("seller_name:", seller_name)
-        print("seller_slug:", seller_slug)
-        print("public_url:", public_url)
-        print("created_at:", created_at)
-       
         conn.close()
+    raise HTTPException(status_code=404, detail="Seller not found")
+    seller_name = row["seller_name"]
+    seller_slug = row["seller_slug"]
+    public_url = row["public_url"]
+    created_at = row["created_at"]
+        
+    print("seller_name:", seller_name)
+    print("seller_slug:", seller_slug)
+    print("public_url:", public_url)
+    print("created_at:", created_at)
+       
+    conn.close()
         
         
         print({
