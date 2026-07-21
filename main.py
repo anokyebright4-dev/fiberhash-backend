@@ -2647,6 +2647,7 @@ async def onboard_seller(
     seller_id: str = Form(...),
 ):
     conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     
     cursor.execute(
