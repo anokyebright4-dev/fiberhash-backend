@@ -2665,8 +2665,8 @@ async def onboard_seller(
     row = cursor.fetchone()
     
     print("===== ONBOARD SELLER =====")
-        print("seller_id:", seller_id)
-        print("row:", row)
+    print("seller_id:", seller_id)
+    print("row:", row)
     
     if not row:
         raise HTTPException(status_code=404, detail="Seller not found")
