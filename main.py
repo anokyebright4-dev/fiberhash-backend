@@ -2685,24 +2685,24 @@ async def onboard_seller(
     conn.close()
         
         
-        print({
-            "status": "success",
-            "seller_id": seller_id,
-            "seller_name": seller_name,
-            "seller_slug": seller_slug,
-            "public_url": public_url,
-            "created_at": created_at,
-        })
-        print("Returning onboard response")
-       
-        return {
-            "status": "success",
-            "seller_id": seller_id,
-            "seller_name": seller_name,
-            "seller_slug": seller_slug,
-            "public_url": public_url,
-            "created_at": created_at
-        }
+    print({
+        "status": "success",
+        "seller_id": seller_id,
+        "seller_name": seller_name,
+        "seller_slug": seller_slug,
+        "public_url": public_url,
+        "created_at": created_at,
+    })
+    print("Returning onboard response")
+    
+    return {
+        "status": "success",
+        "seller_id": seller_id,
+        "seller_name": seller_name,
+        "seller_slug": seller_slug,
+        "public_url": public_url,
+        "created_at": created_at
+    }
     
 @app.get("/api/v1/sellers")
 async def list_sellers():
