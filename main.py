@@ -1317,20 +1317,20 @@ async def login_user(
     user = cursor.fetchone()
 
     conn.close()
-
+    
     if not user:
-        return {
-            "success": False,
-            "message": "Invalid email or password"
-        }
+        raise HTTPException(
+            status_code=401,
+            detail= "Invalid email or password"
+        )
 
     user_id, email, password_hash, role, seller_id = user
 
     if not verify_password(password, password_hash):
-        return {
-            "success": False,
-            "message": "Invalid email or password"
-        }
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid email or password"
+        )
 
     access_token = create_access_token({
         "sub": user_id,
