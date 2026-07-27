@@ -1241,7 +1241,10 @@ async def register_user(
 
     if existing:
         conn.close()
-        return {"success": False, "message": "Email already exists"}
+        raise HTTPException(
+            status_code=409,
+            detail= "Email already exists"
+        )
 
     user_id = str(uuid.uuid4())
     seller_id = None
