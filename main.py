@@ -1263,14 +1263,14 @@ async def register_user(
             status_code=409,
             detail= "Email already exists"
         )
-
-    user_id = str(uuid.uuid4())
-    seller_id = None
     verification_token = str(uuid.uuid4())
 
     verification_token_expires = (
     datetime.utcnow() + timedelta(hours=24)
     ).isoformat()
+    user_id = str(uuid.uuid4())
+    seller_id = None
+    
     if role == "seller" and seller_name:
         seller_id = str(uuid.uuid4())
 
