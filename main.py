@@ -1323,8 +1323,7 @@ verification_link = (
     f"https://fiberhash-backend.onrender.com/api/v1/auth/verify-email"
     f"?token={verification_token}"
 )
-
-    return {
+    return{
         "success": True,
         "user_id": user_id,
         "seller_id": seller_id,
