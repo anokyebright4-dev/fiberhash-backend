@@ -230,7 +230,7 @@ def init_db():
         pass
     try:
         cursor.execute(
-            "ALTER TABLE users ADD COLUMN verification_token TEXT"F
+            "ALTER TABLE users ADD COLUMN verification_token TEXT"
     )
     except: 
         pass
