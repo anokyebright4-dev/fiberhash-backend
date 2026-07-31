@@ -226,17 +226,20 @@ def init_db():
         cursor.execute(
             "ALTER TABLE users ADD COLUMN email_verified INTEGER DEFAULT 0"
         )
-        except: pass
+        except: 
+            pass
     try:
         cursor.execute(
             "ALTER TABLE users ADD COLUMN verification_token TEXT"
         )
-        except: pass
+        except: 
+            pass
     try:
         cursor.execute(
             "ALTER TABLE users ADD COLUMN verification_token_expires TEXT"
     )
-    except: pass
+    except: 
+        pass
 
     conn.commit()
     conn.close()
