@@ -1324,11 +1324,11 @@ verification_link = (
     f"?token={verification_token}"
 )
 
-return {
-    "success": True,
-    "user_id": user_id,
-    "seller_id": seller_id,
-    "verification_link": verification_link
+    return {
+        "success": True,
+        "user_id": user_id,
+        "seller_id": seller_id,
+        "verification_link": verification_link
 } 
     
 @app.get("/api/v1/auth/verify-email")
