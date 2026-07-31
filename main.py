@@ -1318,12 +1318,18 @@ async def register_user(
 
     conn.commit()
     conn.close()
+    
+verification_link = (
+    f"https://fiberhash-backend.onrender.com/api/v1/auth/verify-email"
+    f"?token={verification_token}"
+)
 
-    return {
-        "success": True,
-        "user_id": user_id,
-        "seller_id": seller_id
-    }  
+return {
+    "success": True,
+    "user_id": user_id,
+    "seller_id": seller_id,
+    "verification_link": verification_link
+} 
     
 @app.get("/api/v1/auth/verify-email")
 async def verify_email(token: str):
