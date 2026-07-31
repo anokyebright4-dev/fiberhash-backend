@@ -225,15 +225,15 @@ def init_db():
     try:
         cursor.execute(
             "ALTER TABLE users ADD COLUMN email_verified INTEGER DEFAULT 0"
-        )
-        except: 
-            pass
+    )
+    except: 
+        pass
     try:
         cursor.execute(
             "ALTER TABLE users ADD COLUMN verification_token TEXT"
-        )
-        except: 
-            pass
+    )
+    except: 
+        pass
     try:
         cursor.execute(
             "ALTER TABLE users ADD COLUMN verification_token_expires TEXT"
