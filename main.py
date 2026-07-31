@@ -230,7 +230,7 @@ def init_db():
         pass
     try:
         cursor.execute(
-            "ALTER TABLE users ADD COLUMN verification_token TEXT"
+            "ALTER TABLE users ADD COLUMN verification_token TEXT"F
     )
     except: 
         pass
@@ -1266,7 +1266,11 @@ async def register_user(
 
     user_id = str(uuid.uuid4())
     seller_id = None
+    verification_token = str(uuid.uuid4())
 
+    verification_token_expires = (
+    datetime.utcnow() + timedelta(hours=24)
+    ).isoformat()
     if role == "seller" and seller_name:
         seller_id = str(uuid.uuid4())
 
@@ -1296,8 +1300,8 @@ async def register_user(
     cursor.execute(
         """
         INSERT INTO users
-        (user_id, email, password_hash, role, seller_id, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        (user_id, email, password_hash, role, seller_id,email_verified,verification_token,verification_token_expires, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             user_id,
@@ -1305,6 +1309,9 @@ async def register_user(
             hash_password(password),
             role,
             seller_id,
+            0,
+            verification_token,
+            verification_token_expires,
             datetime.utcnow().isoformat()
         )
     )
