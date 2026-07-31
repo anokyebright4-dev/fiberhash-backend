@@ -1319,11 +1319,11 @@ async def register_user(
     conn.commit()
     conn.close()
     
-verification_link = (
-    f"https://fiberhash-backend.onrender.com/api/v1/auth/verify-email"
-    f"?token={verification_token}"
-)
-    return{
+    verification_link = (
+        f"https://fiberhash-backend.onrender.com/api/v1/auth/verify-email"
+        f"?token={verification_token}"
+    )
+    return {
         "success": True,
         "user_id": user_id,
         "seller_id": seller_id,
