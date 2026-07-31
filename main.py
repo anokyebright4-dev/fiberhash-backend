@@ -1329,7 +1329,7 @@ verification_link = (
         "user_id": user_id,
         "seller_id": seller_id,
         "verification_link": verification_link
-} 
+    } 
     
 @app.get("/api/v1/auth/verify-email")
 async def verify_email(token: str):
