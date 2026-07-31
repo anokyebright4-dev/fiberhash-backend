@@ -1325,6 +1325,57 @@ async def register_user(
         "seller_id": seller_id
     }  
     
+@app.get("/api/v1/auth/verify-email")
+async def verify_email(token: str):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        SELECT user_id, verification_token_expires
+        FROM users
+        WHERE verification_token = ?
+          AND email_verified = 0
+        """,
+        (token,)
+    )
+
+    user = cursor.fetchone()
+
+    if not user:
+        conn.close()
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid verification token"
+        )
+
+    user_id, expires = user
+
+    if datetime.utcnow() > datetime.fromisoformat(expires):
+        conn.close()
+        raise HTTPException(
+            status_code=400,
+            detail="Verification token has expired"
+        )
+
+    cursor.execute(
+        """
+        UPDATE users
+        SET email_verified = 1,
+            verification_token = NULL,
+            verification_token_expires = NULL
+        WHERE user_id = ?
+        """,
+        (user_id,)
+    )
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "success": True,
+        "message": "Email verified successfully"
+    }   
 @app.post("/api/v1/auth/login")
 async def login_user(
     email: str = Form(...),
