@@ -1416,10 +1416,10 @@ async def login_user(
             detail="Invalid email or password"
         )
     if not email_verified:
-    raise HTTPException(
-        status_code=403,
-        detail="Please verify your email before logging in."
-    )
+        raise HTTPException(
+            status_code=403,
+            detail="Please verify your email before logging in."
+        )
 
     access_token = create_access_token({
         "sub": user_id,
