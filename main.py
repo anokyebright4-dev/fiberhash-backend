@@ -1391,7 +1391,7 @@ async def login_user(
 
     cursor.execute(
         """
-        SELECT user_id, email, password_hash, role, seller_id
+        SELECT user_id, email, password_hash, role, seller_id,email_verified
         FROM users
         WHERE email = ?
         """,
@@ -1408,13 +1408,18 @@ async def login_user(
             detail= "Invalid email or password"
         )
 
-    user_id, email, password_hash, role, seller_id = user
+    user_id, email, password_hash, role, seller_id, email_verified = user
 
     if not verify_password(password, password_hash):
         raise HTTPException(
             status_code=401,
             detail="Invalid email or password"
         )
+    if not email_verified:
+    raise HTTPException(
+        status_code=403,
+        detail="Please verify your email before logging in."
+    )
 
     access_token = create_access_token({
         "sub": user_id,
