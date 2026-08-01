@@ -219,7 +219,10 @@ def init_db():
             password_hash TEXT NOT NULL,
             role TEXT NOT NULL,
             seller_id TEXT,
+            reset_token TEXT,
+            reset_token_expires TEXT,
             created_at TEXT
+            
         )
 """)
     try:
@@ -240,6 +243,21 @@ def init_db():
     )
     except: 
         pass
+    try:
+        cursor.execute(
+            "ALTER TABLE users ADD COLUMN reset_token TEXT
+        )
+    except:
+        pass
+        
+    try:
+        cursor.execute(
+        "ALTER TABLE users ADD COLUMN reset_token_expires TEXT
+        )
+    except:
+        pass
+        
+    
 
     conn.commit()
     conn.close()
