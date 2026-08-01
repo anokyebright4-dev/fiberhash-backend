@@ -1521,8 +1521,64 @@ async def forgot_password(
         "success": True,
         "message": "Password reset link generated.",
         "reset_link": reset_link
-    }    
+    }  
     
+@app.post("/api/v1/auth/reset-password")
+async def reset_password(
+    token: str = Form(...),
+    new_password: str = Form(...)
+):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        SELECT user_id, reset_token_expires
+        FROM users
+        WHERE reset_token = ?
+        """,
+        (token,)
+    )
+
+    user = cursor.fetchone()
+
+    if not user:
+        conn.close()
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid reset token"
+        )
+
+    user_id, reset_token_expires = user
+
+    if datetime.utcnow() > datetime.fromisoformat(reset_token_expires):
+        conn.close()
+        raise HTTPException(
+            status_code=400,
+            detail="Reset token has expired"
+        )
+
+    cursor.execute(
+        """
+        UPDATE users
+        SET password_hash = ?,
+            reset_token = NULL,
+            reset_token_expires = NULL
+        WHERE user_id = ?
+        """,
+        (
+            hash_password(new_password),
+            user_id
+        )
+    )
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "success": True,
+        "message": "Password reset successfully."
+    }    
 @app.get("/")
 async def root():
     return {
