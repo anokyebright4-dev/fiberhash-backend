@@ -245,20 +245,18 @@ def init_db():
         pass
     try:
         cursor.execute(
-            "ALTER TABLE users ADD COLUMN reset_token TEXT
+            "ALTER TABLE users ADD COLUMN reset_token TEXT"
         )
     except:
         pass
         
     try:
         cursor.execute(
-        "ALTER TABLE users ADD COLUMN reset_token_expires TEXT
+        "ALTER TABLE users ADD COLUMN reset_token_expires TEXT"
         )
     except:
         pass
         
-    
-
     conn.commit()
     conn.close()
 
