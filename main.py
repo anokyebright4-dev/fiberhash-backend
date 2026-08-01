@@ -1463,7 +1463,65 @@ async def login_user(
         "role": role,
         "seller_id": seller_id,
         "seller_name": seller_name
-    }  
+    }
+    
+@app.post("/api/v1/auth/forgot-password")
+async def forgot_password(
+    email: str = Form(...)
+):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        SELECT user_id
+        FROM users
+        WHERE email = ?
+        """,
+        (email,)
+    )
+
+    user = cursor.fetchone()
+
+    if not user:
+        conn.close()
+        return {
+            "success": True,
+            "message": "If the email exists, a reset link has been generated."
+        }
+
+    reset_token = str(uuid.uuid4())
+    reset_token_expires = (
+        datetime.utcnow() + timedelta(hours=1)
+    ).isoformat()
+
+    cursor.execute(
+        """
+        UPDATE users
+        SET reset_token = ?,
+            reset_token_expires = ?
+        WHERE email = ?
+        """,
+        (
+            reset_token,
+            reset_token_expires,
+            email
+        )
+    )
+
+    conn.commit()
+    conn.close()
+
+    reset_link = (
+        f"https://fiberhash-backend.onrender.com/api/v1/auth/reset-password"
+        f"?token={reset_token}"
+    )
+
+    return {
+        "success": True,
+        "message": "Password reset link generated.",
+        "reset_link": reset_link
+    }    
     
 @app.get("/")
 async def root():
