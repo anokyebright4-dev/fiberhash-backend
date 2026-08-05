@@ -1469,6 +1469,14 @@ async def login_user(
 async def forgot_password(
     email: str = Form(...)
 ):
+    email = email.strip().lower()
+    email_pattern = r"^[A-Za-Z0-9._%+-]+@[A-Za-Z0-9.-]+\.[A-Za-z]{2,}$"
+    if not re.match(email_pattern, email):
+        return {
+            "success": False,
+            "message": "Please enter a valid email address."
+        }
+        
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
