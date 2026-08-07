@@ -11,6 +11,7 @@ import os
 import json
 import uuid
 import re
+import requests
 from datetime import datetime, timezone
 from datetime import timedelta
 from passlib.context import CryptContext
@@ -1465,6 +1466,37 @@ async def login_user(
         "seller_name": seller_name
     }
     
+def send_reset_email(recipient_email: str, reset_link: str):
+    api_key = os.getenv("RESEND_API_KEY")
+    sender = os.getenv("EMAIL_FROM")
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "from": sender,
+        "to": [recipient_email],
+        "subject": "ChallengeProof Password Reset",
+        "html": f"""
+        <h2>ChallengeProof Password Reset</h2>
+        <p>You requested to reset your password.</p>
+        <p>Click the link below to choose a new password:</p>
+        <p><a href="{reset_link}">{reset_link}</a></p>
+        <p>This link expires in 1 hour.</p>
+        <p>If you did not request this, you can safely ignore this email.</p>
+        """,
+    }
+
+    response = requests.post(
+        "https://api.resend.com/emails",
+        headers=headers,
+        json=payload,
+    )
+
+    return response   
+    
 @app.post("/api/v1/auth/forgot-password")
 async def forgot_password(
     email: str = Form(...)
@@ -1524,6 +1556,16 @@ async def forgot_password(
         f"https://fiberhash-backend.onrender.com/api/v1/auth/reset-password"
         f"?token={reset_token}"
     )
+    try:
+        send_reset_email(email, reset_link) 
+    except Exception as e:
+        print(f"Email send failed: {e}")
+
+    return {
+        "success": True,
+        "message": "Password reset link generated.",
+        "reset_link": reset_link
+    }    
 
     return {
         "success": True,
