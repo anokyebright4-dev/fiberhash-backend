@@ -1553,7 +1553,7 @@ async def forgot_password(
     conn.close()
 
     reset_link = (
-        f"https://fiberhash-backend.onrender.com/api/v1/auth/reset-password"
+        f"https://fiber-hash-seal-lock-03xeqt.flutterflow.app/resetPasswordPage"
         f"?token={reset_token}"
     )
     try:
