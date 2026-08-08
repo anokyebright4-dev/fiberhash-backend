@@ -1498,7 +1498,7 @@ def send_reset_email(recipient_email: str, reset_link: str):
 
     return response   
     
- def send_verification_email(recipient_email: str, verification_link: str):
+def send_verification_email(recipient_email: str, verification_link: str):
     api_key = os.getenv("RESEND_API_KEY")
     sender = os.getenv("EMAIL_FROM")
 
