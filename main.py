@@ -1337,9 +1337,10 @@ async def register_user(
     conn.close()
     
     verification_link = (
-        f"https://fiberhash-backend.onrender.com/api/v1/auth/verify-email"
+        f"https://fiber-hash-seal-lock-03xeqt.flutterflow.app/verifiy-email"
         f"?token={verification_token}"
     )
+    send_verification_email(email, verification_link)
     return {
         "success": True,
         "user_id": user_id,
@@ -1486,6 +1487,40 @@ def send_reset_email(recipient_email: str, reset_link: str):
         <p><a href="{reset_link}">{reset_link}</a></p>
         <p>This link expires in 1 hour.</p>
         <p>If you did not request this, you can safely ignore this email.</p>
+        """,
+    }
+
+    response = requests.post(
+        "https://api.resend.com/emails",
+        headers=headers,
+        json=payload,
+    )
+
+    return response   
+    
+ def send_verification_email(recipient_email: str, verification_link: str):
+    api_key = os.getenv("RESEND_API_KEY")
+    sender = os.getenv("EMAIL_FROM")
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "from": sender,
+        "to": [recipient_email],
+        "subject": "ChallengeProof Email Verification",
+        "html": f"""
+        <h2>Welcome to ChallengeProof</h2>
+        <p>Please verify your email address to activate your account.</p>
+        <p>
+            <a href="{verification_link}">
+                Verify My Email
+            </a>
+        </p>
+        <p>This verification link expires in 24 hours.</p>
+        <p>If you did not create this account, you can safely ignore this email.</p>
         """,
     }
 
