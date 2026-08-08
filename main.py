@@ -1612,6 +1612,7 @@ async def reset_password(
         """
         UPDATE users
         SET password_hash = ?,
+            email_verified = 1,
             reset_token = NULL,
             reset_token_expires = NULL
         WHERE user_id = ?
