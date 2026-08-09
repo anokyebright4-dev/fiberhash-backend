@@ -1337,7 +1337,7 @@ async def register_user(
     conn.close()
     
     verification_link = (
-        f"https://fiber-hash-seal-lock-03xeqt.flutterflow.app/verifiy-email"
+        f"https://fiber-hash-seal-lock-03xeqt.flutterflow.app/verify-email"
         f"?token={verification_token}"
     )
     send_verification_email(email, verification_link)
