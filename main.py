@@ -316,7 +316,7 @@ QUIET_ZONE_CANONICAL_SIZE = 512
 # Percentage of the detected boundary excluded from the
 # fingerprint region so the physical boundary itself does
 # not contaminate the surface texture.
-QUIET_ZONE_BORDER_INSET = 0.06
+QUIET_ZONE_BORDER_INSET = 0.05
 
 # Conservative acceptance threshold.
 QUIET_ZONE_MIN_CONFIDENCE = 0.78
