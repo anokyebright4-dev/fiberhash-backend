@@ -316,7 +316,7 @@ QUIET_ZONE_CANONICAL_SIZE = 512
 # Percentage of the detected boundary excluded from the
 # fingerprint region so the physical boundary itself does
 # not contaminate the surface texture.
-QUIET_ZONE_BORDER_INSET = 0.00
+QUIET_ZONE_BORDER_INSET = 0.06
 
 # Conservative acceptance threshold.
 QUIET_ZONE_MIN_CONFIDENCE = 0.78
@@ -1206,6 +1206,22 @@ def extract_quiet_zone(
             0.20
             * margin_confidence
         )
+
+        # Fail closed when the best and second-best physical candidates
+        # are too close to call. The configured margin is expressed as
+        # confidence units (0.08 = 8 score points out of 100).
+        if (
+            score_margin / 100.0
+            < QUIET_ZONE_MIN_SCORE_MARGIN
+        ):
+            return {
+                "success": False,
+                "reason": "QUIET_ZONE_DETECTION_AMBIGUOUS",
+                "confidence": round(combined_confidence, 4),
+                "corners": None,
+                "image": None,
+                "capture_context": capture_context,
+            }
 
     else:
         # With only one distinct geometric candidate,
@@ -2739,90 +2755,10 @@ async def verify_direct(
                 "message": str(e),
             },
         )
-def crop_center_square(img):
-    h, w = img.shape[:2]
-    crop_size = int(min(h, w) * 0.70)
-
-    cx = w // 2
-    cy = h // 2
-
-    x1 = max(0, cx - crop_size // 2)
-    y1 = max(0, cy - crop_size // 2)
-    x2 = min(w, cx + crop_size // 2)
-    y2 = min(h, cy + crop_size // 2)
-
-    return img[y1:y2, x1:x2]
-
-
-def isolate_square_roi(img):
-    if img is None or getattr(img, "size", 0) == 0:
-        raise HTTPException(
-        status_code=400,
-        detail="Invalid or empty image received before ROI isolation"
-    )
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    edges = cv2.Canny(blurred, 50, 150)
-
-    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    candidates = []
-
-    for c in contours:
-        area = cv2.contourArea(c)
-        if area < 2000:
-            continue
-
-        peri = cv2.arcLength(c, True)
-        approx = cv2.approxPolyDP(c, 0.04 * peri, True)
-
-        if len(approx) == 4:
-            x, y, w, h = cv2.boundingRect(approx)
-            ratio = w / float(h)
-
-            if 0.75 <= ratio <= 1.25:
-                candidates.append((area, x, y, w, h))
-
-    if not candidates:
-        return crop_center_square(img)
-
-    _, x, y, w, h = max(candidates, key=lambda item: item[0])
-
-    pad = int(min(w, h) * 0.0)
-
-    x1 = max(0, x - pad)
-    y1 = max(0, y - pad)
-    x2 = min(img.shape[1], x + w + pad)
-    y2 = min(img.shape[0], y + h + pad)
-
-    return img[y:y+h, x:x+w]
-
-
-def isolate_unprinted_package_surface(img):
-    try:
-        roi = isolate_square_roi(img)
-
-        if roi is None or getattr(roi, "size", 0) == 0:
-            return img
-
-        return roi
-
-    except Exception as e:
-        print("Package ROI isolation failed, using original image:", str(e))
-        return img
-
-def isolate_seal_surface(img):
-    try:
-        roi = isolate_square_roi(img)
-
-        if roi is None or getattr(roi, "size", 0) == 0:
-            return img
-
-        return roi
-
-    except Exception as e:
-        print("Seal ROI isolation failed, using original image:", str(e))
-        return img
+# The old centre-crop / largest-square ROI path has intentionally been removed.
+# Quiet Zone extraction must always be performed by extract_quiet_zone() on the
+# ORIGINAL camera frame. That detector owns candidate discovery, geometry,
+# perspective correction and canonical extraction.
     
     
 @app.post("/api/v1/units/verify")
@@ -2864,16 +2800,89 @@ async def verify_unit(
         package_scan_bytes = await package_scan.read()
         seal_scan_bytes = await seal_scan.read()
 
-        package_scan_img = decode_image(package_scan_bytes)
-        seal_scan_img = decode_image(seal_scan_bytes)
+        package_scan_img_raw = decode_image(package_scan_bytes)
+        seal_scan_img_raw = decode_image(seal_scan_bytes)
 
-        package_scan_img = isolate_unprinted_package_surface(package_scan_img)
-        seal_scan_img = isolate_seal_surface(seal_scan_img)
+        if package_scan_img_raw is None or seal_scan_img_raw is None:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "decision": "fail",
+                    "package_match": False,
+                    "seal_match": False,
+                    "trust_score": 0,
+                    "message": "Package or seal scan could not be decoded.",
+                },
+            )
+
+        package_qz_result = extract_quiet_zone(
+            package_scan_img_raw,
+            capture_context=package_capture_context,
+        )
+        seal_qz_result = extract_quiet_zone(
+            seal_scan_img_raw,
+            capture_context=seal_capture_context,
+        )
+
+        if not package_qz_result.get("success") or not seal_qz_result.get("success"):
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "status": "error",
+                    "decision": "review",
+                    "package_match": False,
+                    "seal_match": False,
+                    "trust_score": 0,
+                    "message": "One or both scans failed Quiet Zone detection.",
+                    "package_quiet_zone": {
+                        "success": package_qz_result.get("success", False),
+                        "reason": package_qz_result.get("reason"),
+                        "confidence": package_qz_result.get("confidence", 0.0),
+                    },
+                    "seal_quiet_zone": {
+                        "success": seal_qz_result.get("success", False),
+                        "reason": seal_qz_result.get("reason"),
+                        "confidence": seal_qz_result.get("confidence", 0.0),
+                    },
+                },
+            )
+
+        package_scan_img = package_qz_result.get("image")
+        seal_scan_img = seal_qz_result.get("image")
+
+        if package_scan_img is None or seal_scan_img is None:
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "status": "error",
+                    "decision": "review",
+                    "package_match": False,
+                    "seal_match": False,
+                    "trust_score": 0,
+                    "message": "Quiet Zone detection succeeded but canonical extraction returned no image.",
+                },
+            )
+
         os.makedirs("debug_rois", exist_ok=True)
-        cv2.imwrite("debug_rois/verify_package_roi.jpg", package_scan_img)
-        cv2.imwrite("debug_rois/verify_seal_roi.jpg", seal_scan_img)
-        _, package_encoded = cv2.imencode(".jpg", package_scan_img)
-        _, seal_encoded = cv2.imencode(".jpg", seal_scan_img)
+        cv2.imwrite("debug_rois/verify_package_quiet_zone.jpg", package_scan_img)
+        cv2.imwrite("debug_rois/verify_seal_quiet_zone.jpg", seal_scan_img)
+
+        package_ok, package_encoded = cv2.imencode(".jpg", package_scan_img)
+        seal_ok, seal_encoded = cv2.imencode(".jpg", seal_scan_img)
+
+        if not package_ok or not seal_ok:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "decision": "fail",
+                    "package_match": False,
+                    "seal_match": False,
+                    "trust_score": 0,
+                    "message": "Canonical Quiet Zone extraction could not be encoded.",
+                },
+            )
 
         package_scan_bytes = package_encoded.tobytes()
         seal_scan_bytes = seal_encoded.tobytes()
@@ -3149,15 +3158,72 @@ async def register_unit(
 
     package_img = None
     seal_img = None
-    if  package_image is not None:
-        package_bytes = await package_image.read()
-        package_img = decode_image(package_bytes)
-        package_img = isolate_unprinted_package_surface(package_img)
+    package_qz_result = None
+    seal_qz_result = None
 
-    if  seal_image is not None:
+    if package_image is not None:
+        package_bytes = await package_image.read()
+        package_raw = decode_image(package_bytes)
+
+        if package_raw is None:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "message": "Package baseline image could not be decoded.",
+                },
+            )
+
+        package_qz_result = extract_quiet_zone(
+            package_raw,
+            capture_context=package_capture_context,
+        )
+
+        if not package_qz_result.get("success"):
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "status": "error",
+                    "message": "Package baseline Quiet Zone could not be confidently detected.",
+                    "reason": package_qz_result.get("reason"),
+                    "confidence": package_qz_result.get("confidence", 0.0),
+                    "capture_context": package_capture_context,
+                },
+            )
+
+        package_img = package_qz_result.get("image")
+
+    if seal_image is not None:
         seal_bytes = await seal_image.read()
-        seal_img = decode_image(seal_bytes)
-        seal_img = isolate_seal_surface(seal_img) 
+        seal_raw = decode_image(seal_bytes)
+
+        if seal_raw is None:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "message": "Seal baseline image could not be decoded.",
+                },
+            )
+
+        seal_qz_result = extract_quiet_zone(
+            seal_raw,
+            capture_context=seal_capture_context,
+        )
+
+        if not seal_qz_result.get("success"):
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "status": "error",
+                    "message": "Seal baseline Quiet Zone could not be confidently detected.",
+                    "reason": seal_qz_result.get("reason"),
+                    "confidence": seal_qz_result.get("confidence", 0.0),
+                    "capture_context": seal_capture_context,
+                },
+            )
+
+        seal_img = seal_qz_result.get("image")
 
 
 # CASE 1: RAW UNIT REGISTRATION ONLY
@@ -3375,6 +3441,64 @@ async def register_brand_baseline_images(
 
         package_bytes = await package_image.read()
         seal_bytes = await seal_image.read()
+
+        package_raw = decode_image(package_bytes)
+        seal_raw = decode_image(seal_bytes)
+
+        if package_raw is None or seal_raw is None:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "message": "Brand baseline package or seal image could not be decoded.",
+                },
+            )
+
+        package_qz_result = extract_quiet_zone(
+            package_raw,
+            capture_context=package_capture_context,
+        )
+        seal_qz_result = extract_quiet_zone(
+            seal_raw,
+            capture_context=seal_capture_context,
+        )
+
+        if not package_qz_result.get("success") or not seal_qz_result.get("success"):
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "status": "error",
+                    "message": "One or both brand baseline images failed Quiet Zone detection.",
+                    "package_quiet_zone": {
+                        "success": package_qz_result.get("success", False),
+                        "reason": package_qz_result.get("reason"),
+                        "confidence": package_qz_result.get("confidence", 0.0),
+                    },
+                    "seal_quiet_zone": {
+                        "success": seal_qz_result.get("success", False),
+                        "reason": seal_qz_result.get("reason"),
+                        "confidence": seal_qz_result.get("confidence", 0.0),
+                    },
+                },
+            )
+
+        package_img = package_qz_result.get("image")
+        seal_img = seal_qz_result.get("image")
+
+        package_ok, package_encoded = cv2.imencode(".jpg", package_img)
+        seal_ok, seal_encoded = cv2.imencode(".jpg", seal_img)
+
+        if not package_ok or not seal_ok:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "message": "Canonical Quiet Zone images could not be encoded.",
+                },
+            )
+
+        package_bytes = package_encoded.tobytes()
+        seal_bytes = seal_encoded.tobytes()
 
         package_hash = hashlib.sha256(package_bytes).hexdigest()
         seal_hash = hashlib.sha256(seal_bytes).hexdigest()
@@ -4751,4 +4875,3 @@ async def debug_quiet_zone(
                 "Quiet Zone diagnostic failed."
             ),
         )
-
