@@ -4826,6 +4826,63 @@ async def debug_quiet_zone(
                     "but returned no image."
                 ),
             )
+        # ----------------------------------------------------
+        # DEBUG: DRAW THE SELECTED QUIET ZONE CORNERS
+        # ON THE ORIGINAL IMAGE
+        # ----------------------------------------------------
+
+        debug_image = image.copy()
+
+        corners = result.get("corners")
+
+        if not corners or len(corners) != 4:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Quiet Zone detection succeeded "
+                    "but did not return four corners."
+                ),
+            )
+
+        debug_points = np.array(
+            corners,
+            dtype=np.int32,
+        ).reshape(4, 2)
+
+        # Draw the selected physical Quiet Zone boundary.
+        cv2.polylines(
+            debug_image,
+            [debug_points],
+            True,
+            (0, 255, 0),
+            4,
+        )
+
+        # Draw each selected corner.
+        for index, point in enumerate(debug_points):
+            x = int(point[0])
+            y = int(point[1])
+
+            cv2.circle(
+                debug_image,
+                (x, y),
+                12,
+                (0, 0, 255),
+                -1,
+            )
+
+            cv2.putText(
+                debug_image,
+                str(index + 1),
+                (x + 15, y - 15),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1.0,
+                (0, 0, 255),
+                3,
+                cv2.LINE_AA,
+            )
+
+        canonical = debug_image
 
         # ----------------------------------------------------
         # 5. ENCODE AS PNG
