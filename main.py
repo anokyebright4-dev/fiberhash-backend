@@ -1250,39 +1250,16 @@ def extract_quiet_zone(
             "capture_context": capture_context,
         }
 
-    # --------------------------------------------------------
+        # --------------------------------------------------------
     # 16. CANONICAL EXTRACTION
     # --------------------------------------------------------
-
-    inset = int(
-        QUIET_ZONE_CANONICAL_SIZE
-        * QUIET_ZONE_BORDER_INSET
-    )
 
     canonical_size = (
         QUIET_ZONE_CANONICAL_SIZE
     )
 
-    if (
-        inset <= 0
-        or inset * 2 >= canonical_size
-    ):
-        return {
-            "success": False,
-            "reason": "INVALID_QUIET_ZONE_BORDER_CONFIGURATION",
-            "confidence": 0.0,
-            "corners": None,
-            "image": None,
-            "capture_context": capture_context,
-        }
-
     try:
-        canonical = best["warped"][
-            inset:
-            canonical_size - inset,
-            inset:
-            canonical_size - inset,
-        ]
+        canonical = best["warped"]
 
         if (
             canonical is None
@@ -1296,6 +1273,35 @@ def extract_quiet_zone(
                 "image": None,
                 "capture_context": capture_context,
             }
+
+        if canonical.shape[:2] != (
+            canonical_size,
+            canonical_size,
+        ):
+            canonical = cv2.resize(
+                canonical,
+                (
+                    canonical_size,
+                    canonical_size,
+                ),
+                interpolation=cv2.INTER_CUBIC,
+            )
+
+    except (
+        cv2.error,
+        ValueError,
+        TypeError,
+    ):
+        return {
+            "success": False,
+            "reason": "CANONICAL_RESIZE_FAILED",
+            "confidence": 0.0,
+            "corners": None,
+            "image": None,
+            "capture_context": capture_context,
+        }
+    
+            
 
         canonical = cv2.resize(
             canonical,
