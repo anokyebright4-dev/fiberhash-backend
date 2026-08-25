@@ -558,81 +558,132 @@ def _quiet_zone_surface_metrics(warped):
         "value_std": value_std,
     }
     
+# Surgical camera/JPG Quiet Zone fix.
+# Replace ONLY the existing extract_quiet_zone() function with this block.
+# No other backend section is to be replaced.
+
 def extract_quiet_zone(
     image,
     capture_context="factory_registration",
 ):
     """
-    Detect, validate and canonicalise the physical
-    Quiet Zone.
+    Detect, validate and canonicalise the physical Quiet Zone.
 
-    The Quiet Zone is the intentionally unprinted physical
-    square reserved for FiberHash surface fingerprinting.
+    The detector searches the complete camera image at multiple scales
+    and in overlapping ROIs. The ROIs are a search optimisation only;
+    the backend still determines the actual four physical corners.
 
-    This function performs:
-        1. Candidate discovery
-        2. Geometric validation
-        3. Candidate de-duplication
-        4. Candidate scoring
-        5. Ambiguity rejection
-        6. Perspective correction
-        7. Canonical extraction
-
-    It fails closed.
-
-    It NEVER substitutes an arbitrary image when the
-    Quiet Zone cannot be confidently identified.
+    It fails closed and never substitutes an arbitrary image.
     """
+
+    def _quiet_zone_search_regions(width, height):
+        """
+        Return overlapping search regions in image coordinates.
+
+        The full frame is always searched. Additional overlapping regions
+        prevent a physically valid Quiet Zone from being discarded merely
+        because it occupies a small percentage of a high-resolution phone
+        photograph.
+        """
+        regions = [
+            (0, 0, width, height),
+        ]
+
+        # Central regions correspond to the weak positional prior supplied
+        # by the Flutter 45 x 45 mm capture guide. They do NOT define the
+        # extraction boundary.
+        for fraction in (0.82, 0.68):
+            rw = int(width * fraction)
+            rh = int(height * fraction)
+            x = max(0, (width - rw) // 2)
+            y = max(0, (height - rh) // 2)
+            regions.append((x, y, min(width, x + rw), min(height, y + rh)))
+
+        # Four overlapping quadrants provide coverage when the user is not
+        # perfectly centred on the guide.
+        for x0, x1 in ((0.0, 0.65), (0.35, 1.0)):
+            for y0, y1 in ((0.0, 0.65), (0.35, 1.0)):
+                regions.append((
+                    int(width * x0),
+                    int(height * y0),
+                    int(width * x1),
+                    int(height * y1),
+                ))
+
+        unique = []
+        seen = set()
+        for region in regions:
+            key = tuple(int(v) for v in region)
+            if key in seen:
+                continue
+            seen.add(key)
+            if key[2] - key[0] >= 300 and key[3] - key[1] >= 300:
+                unique.append(key)
+
+        return unique
+
+    def _quiet_zone_boundary_score(warped):
+        """Weakly score whether the detected boundary differs from its interior."""
+        if warped is None or warped.size == 0:
+            return 0.0
+
+        try:
+            h, w = warped.shape[:2]
+            outer = max(4, int(min(h, w) * 0.06))
+            inner_margin = max(outer * 2, int(min(h, w) * 0.14))
+
+            if inner_margin * 2 >= min(h, w):
+                return 0.0
+
+            gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY).astype(np.float32)
+            inner = gray[inner_margin:h-inner_margin, inner_margin:w-inner_margin]
+
+            ring_mask = np.ones((h, w), dtype=np.uint8)
+            ring_mask[inner_margin:h-inner_margin, inner_margin:w-inner_margin] = 0
+            ring_mask[:outer, :] = 1
+            ring_mask[-outer:, :] = 1
+            ring_mask[:, :outer] = 1
+            ring_mask[:, -outer:] = 1
+
+            ring = gray[ring_mask > 0]
+            if inner.size == 0 or ring.size == 0:
+                return 0.0
+
+            contrast = abs(float(np.mean(ring)) - float(np.mean(inner)))
+            return max(0.0, min(1.0, contrast / 35.0))
+        except (cv2.error, ValueError, TypeError):
+            return 0.0
 
     # --------------------------------------------------------
     # 1. BASIC INPUT VALIDATION
     # --------------------------------------------------------
-
     if image is None:
         return {
-            "success": False,
-            "reason": "INVALID_IMAGE",
-            "confidence": 0.0,
-            "corners": None,
-            "image": None,
-            "capture_context": capture_context,
+            "success": False, "reason": "INVALID_IMAGE", "confidence": 0.0,
+            "corners": None, "image": None, "capture_context": capture_context,
         }
 
     if not isinstance(image, np.ndarray):
         return {
-            "success": False,
-            "reason": "INVALID_IMAGE_TYPE",
-            "confidence": 0.0,
-            "corners": None,
-            "image": None,
-            "capture_context": capture_context,
+            "success": False, "reason": "INVALID_IMAGE_TYPE", "confidence": 0.0,
+            "corners": None, "image": None, "capture_context": capture_context,
         }
 
     if image.size == 0:
         return {
-            "success": False,
-            "reason": "EMPTY_IMAGE",
-            "confidence": 0.0,
-            "corners": None,
-            "image": None,
-            "capture_context": capture_context,
+            "success": False, "reason": "EMPTY_IMAGE", "confidence": 0.0,
+            "corners": None, "image": None, "capture_context": capture_context,
         }
 
     if image.ndim != 3 or image.shape[2] != 3:
         return {
-            "success": False,
-            "reason": "INVALID_IMAGE_CHANNELS",
-            "confidence": 0.0,
-            "corners": None,
-            "image": None,
-            "capture_context": capture_context,
+            "success": False, "reason": "INVALID_IMAGE_CHANNELS", "confidence": 0.0,
+            "corners": None, "image": None, "capture_context": capture_context,
         }
 
-    height, width = image.shape[:2]
+    original_height, original_width = image.shape[:2]
 
-    # The detector needs enough resolution to identify the
-    # physical boundary reliably.
-    if width < 600 or height < 600:
+    if original_width < 600 or original_height < 600:
         return {
             "success": False,
             "reason": "IMAGE_TOO_SMALL_FOR_QUIET_ZONE_DETECTION",
@@ -643,14 +694,35 @@ def extract_quiet_zone(
         }
 
     # --------------------------------------------------------
-    # 2. PREPARE EDGE IMAGE
+    # 2. NORMALISE SEARCH RESOLUTION
     # --------------------------------------------------------
+    # A modern phone can produce a 12MP+ frame. Running contour
+    # discovery directly at that resolution makes a small physical
+    # Quiet Zone look artificially insignificant and is unnecessarily
+    # expensive. Detection is performed at <= 1800 px while the final
+    # warp still uses the original image.
+    max_search_dimension = 1800
+    scale = min(
+        1.0,
+        max_search_dimension / float(max(original_width, original_height)),
+    )
+
+    if scale < 1.0:
+        search_image = cv2.resize(
+            image,
+            (
+                int(round(original_width * scale)),
+                int(round(original_height * scale)),
+            ),
+            interpolation=cv2.INTER_AREA,
+        )
+    else:
+        search_image = image
+
+    search_height, search_width = search_image.shape[:2]
 
     try:
-        gray = cv2.cvtColor(
-            image,
-            cv2.COLOR_BGR2GRAY,
-        )
+        gray = cv2.cvtColor(search_image, cv2.COLOR_BGR2GRAY)
     except cv2.error:
         return {
             "success": False,
@@ -661,430 +733,284 @@ def extract_quiet_zone(
             "capture_context": capture_context,
         }
 
-    # Several edge configurations make the detector less
-    # dependent on one particular lighting/contrast condition.
     configurations = [
-        (20, 80, 3),
-        (30, 100, 3),
-        (40, 120, 5),
-        (50, 150, 7),
-        (60, 180, 9),
+        (15, 60, 3, "canny"),
+        (20, 80, 3, "canny"),
+        (30, 100, 5, "canny"),
+        (40, 120, 5, "canny"),
+        (50, 150, 7, "canny"),
+        (60, 180, 9, "canny"),
+        (4, 11, 9, "local_contrast"),
+        (6, 15, 11, "local_contrast"),
+        (8, 20, 15, "local_contrast"),
     ]
 
     candidates = []
+    regions = _quiet_zone_search_regions(search_width, search_height)
 
     # --------------------------------------------------------
-    # 3. CANDIDATE DISCOVERY
+    # 3. MULTI-SCALE / ROI CANDIDATE DISCOVERY
     # --------------------------------------------------------
+    for rx1, ry1, rx2, ry2 in regions:
+        roi_gray = gray[ry1:ry2, rx1:rx2]
+        roi_height, roi_width = roi_gray.shape[:2]
 
-    for lower_threshold, upper_threshold, kernel_size in configurations:
+        if roi_width < 300 or roi_height < 300:
+            continue
 
-        blurred = cv2.GaussianBlur(
-            gray,
-            (5, 5),
-            0,
-        )
+        roi_area = float(roi_width * roi_height)
 
-        edges = cv2.Canny(
-            blurred,
-            lower_threshold,
-            upper_threshold,
-        )
-
-        kernel = np.ones(
-            (kernel_size, kernel_size),
-            dtype=np.uint8,
-        )
-
-        edges = cv2.morphologyEx(
-            edges,
-            cv2.MORPH_CLOSE,
-            kernel,
-            iterations=1,
-        )
-
-        contours, _ = cv2.findContours(
-            edges,
-            cv2.RETR_LIST,
-            cv2.CHAIN_APPROX_SIMPLE,
-        )
-
-        for contour in contours:
-
-            if contour is None or len(contour) < 4:
-                continue
-
-            contour_area = float(
-                cv2.contourArea(contour)
-            )
-
-            if not np.isfinite(contour_area):
-                continue
-
-            area_ratio = (
-                contour_area
-                / float(width * height)
-            )
-
-            # The Quiet Zone must not be required to occupy a
-            # fixed 1% of the entire camera photograph.
-            # Full-resolution phone captures contain substantial
-            # surrounding image area, so that fixed ratio can
-            # discard a genuine physical Quiet Zone before the
-            # four-corner geometry checks are reached.
-            #
-            # Retain a conservative lower bound for very small
-            # candidates, while allowing the minimum ratio to fall
-            # for large camera frames. The existing geometric and
-            # confidence checks remain unchanged.
-            min_area_ratio = min(
-                0.01,
-                max(
-                    0.0025,
-                    10000.0 / float(width * height),
-                ),
-            )
-
-            if area_ratio < min_area_ratio:
-                continue
-
-            if area_ratio > 0.45:
-                continue
-
-            perimeter = float(
-                cv2.arcLength(
-                    contour,
-                    True,
+        for lower_threshold, upper_threshold, kernel_size, detection_method in configurations:
+            if detection_method == "canny":
+                blurred = cv2.GaussianBlur(roi_gray, (5, 5), 0)
+                edges = cv2.Canny(
+                    blurred,
+                    lower_threshold,
+                    upper_threshold,
                 )
-            )
-
-            if not np.isfinite(perimeter):
-                continue
-
-            if perimeter <= 0.0:
-                continue
-
-            approximation = cv2.approxPolyDP(
-                contour,
-                0.04 * perimeter,
-                True,
-            )
-
-            if approximation is None:
-                continue
-
-            if len(approximation) != 4:
-                continue
-
-            if not cv2.isContourConvex(
-                approximation
-            ):
-                continue
-
-            candidate_points = (
-                approximation.reshape(4, 2)
-            )
-
-            # ------------------------------------------------
-            # 4. GEOMETRIC VALIDATION
-            # ------------------------------------------------
-
-            if not np.all(
-                np.isfinite(candidate_points)
-            ):
-                continue
-
-            geometry = _quiet_zone_geometry(
-                candidate_points
-            )
-
-            if geometry is None:
-                continue
-
-            (
-                ordered,
-                side_lengths,
-                aspect_ratio,
-                right_angle_score,
-                area,
-            ) = geometry
-
-            if not np.all(
-                np.isfinite(ordered)
-            ):
-                continue
-
-            if not np.all(
-                np.isfinite(side_lengths)
-            ):
-                continue
-
-            if not np.isfinite(
-                aspect_ratio
-            ):
-                continue
-
-            if not np.isfinite(
-                right_angle_score
-            ):
-                continue
-
-            if aspect_ratio < 0.72:
-                continue
-
-            if right_angle_score < 0.70:
-                continue
-
-            if area <= 0.0:
-                continue
-
-            # ------------------------------------------------
-            # 5. INTEGER GEOMETRY FOR OPENCV
-            # ------------------------------------------------
-
-            ordered_int = np.round(
-                ordered
-            ).astype(np.int32)
-
-            if ordered_int.shape != (4, 2):
-                continue
-
-            x, y, box_width, box_height = (
-                cv2.boundingRect(
-                    ordered_int
+            else:
+                # Local-contrast detection catches a Quiet Zone whose
+                # physical boundary is visible to the eye but too weak
+                # for a conventional Canny edge threshold.
+                smooth = cv2.GaussianBlur(roi_gray, (5, 5), 0)
+                background = cv2.GaussianBlur(
+                    smooth,
+                    (0, 0),
+                    sigmaX=float(kernel_size),
+                    sigmaY=float(kernel_size),
                 )
-            )
-
-            if box_width <= 0 or box_height <= 0:
-                continue
-
-            # ------------------------------------------------
-            # 6. PERSPECTIVE CORRECTION
-            # ------------------------------------------------
-
-            try:
-                warped = _warp_quiet_zone(
-                    image,
-                    ordered,
-                    QUIET_ZONE_CANONICAL_SIZE,
+                local_difference = cv2.absdiff(
+                    smooth,
+                    background,
                 )
-            except (
-                cv2.error,
-                ValueError,
-                TypeError,
-            ):
-                continue
-
-            if warped is None:
-                continue
-
-            if warped.size == 0:
-                continue
-
-            expected_size = (
-                QUIET_ZONE_CANONICAL_SIZE,
-                QUIET_ZONE_CANONICAL_SIZE,
-            )
-
-            if warped.shape[:2] != expected_size:
-                continue
-
-            # ------------------------------------------------
-            # 7. SURFACE METRICS
-            # ------------------------------------------------
-
-            try:
-                metrics = _quiet_zone_surface_metrics(
-                    warped
+                _, edges = cv2.threshold(
+                    local_difference,
+                    float(lower_threshold),
+                    255,
+                    cv2.THRESH_BINARY,
                 )
-            except (
-                cv2.error,
-                ValueError,
-                TypeError,
-            ):
-                continue
 
-            edge_density = float(
-                metrics.get(
-                    "edge_density",
-                    1.0,
-                )
+            kernel = np.ones(
+                (kernel_size, kernel_size),
+                dtype=np.uint8,
+            )
+            edges = cv2.morphologyEx(
+                edges,
+                cv2.MORPH_CLOSE,
+                kernel,
+                iterations=1,
             )
 
-            long_line_count = int(
-                metrics.get(
-                    "long_line_count",
-                    999,
-                )
+            contours, _ = cv2.findContours(
+                edges,
+                cv2.RETR_LIST,
+                cv2.CHAIN_APPROX_SIMPLE,
             )
 
-            if not np.isfinite(
-                edge_density
-            ):
-                continue
+            for contour in contours:
+                if contour is None or len(contour) < 4:
+                    continue
 
-            # ------------------------------------------------
-            # 8. CENTRE POSITION SCORE
-            # ------------------------------------------------
-            #
-            # The 45 × 45 mm guide provides a weak positional
-            # prior only.
-            #
-            # It NEVER defines the extraction region.
+                contour_area = float(cv2.contourArea(contour))
+                if not np.isfinite(contour_area):
+                    continue
 
-            center = np.mean(
-                ordered,
-                axis=0,
-            )
+                area_ratio = contour_area / roi_area
 
-            if not np.all(
-                np.isfinite(center)
-            ):
-                continue
+                # The old 1% full-frame gate was the main failure mode
+                # for phone photographs. The ROI threshold is deliberately
+                # lower, but absolute geometry and confidence remain strict.
+                if area_ratio < 0.003:
+                    continue
+                if area_ratio > 0.60:
+                    continue
 
-            normalized_center_distance = float(
-                np.hypot(
+                perimeter = float(cv2.arcLength(contour, True))
+                if not np.isfinite(perimeter) or perimeter <= 0.0:
+                    continue
+
+                # Test several approximation tolerances. A 0.04-only
+                # approximation can collapse a genuine subtle square into
+                # a non-four-sided contour.
+                approximations = []
+                for epsilon_fraction in (0.02, 0.03, 0.04, 0.05):
+                    approximation = cv2.approxPolyDP(
+                        contour,
+                        epsilon_fraction * perimeter,
+                        True,
+                    )
+                    if approximation is None or len(approximation) != 4:
+                        continue
+                    if not cv2.isContourConvex(approximation):
+                        continue
+                    approximations.append(approximation)
+
+                if not approximations:
+                    continue
+
+                for approximation in approximations:
+                    candidate_points_roi = approximation.reshape(4, 2).astype(np.float32)
+                    candidate_points_search = candidate_points_roi + np.array(
+                        [rx1, ry1],
+                        dtype=np.float32,
+                    )
+
+                    if not np.all(np.isfinite(candidate_points_search)):
+                        continue
+
+                    geometry = _quiet_zone_geometry(candidate_points_search)
+                    if geometry is None:
+                        continue
+
                     (
-                        center[0]
-                        - width / 2.0
-                    ) / (width / 2.0),
-                    (
-                        center[1]
-                        - height / 2.0
-                    ) / (height / 2.0),
-                )
-            )
+                        ordered_search,
+                        side_lengths,
+                        aspect_ratio,
+                        right_angle_score,
+                        area,
+                    ) = geometry
 
-            center_score = max(
-                0.0,
-                min(
-                    1.0,
-                    1.0
-                    - (
-                        normalized_center_distance
-                        / 0.90
-                    ),
-                ),
-            )
+                    if not np.all(np.isfinite(ordered_search)):
+                        continue
+                    if not np.all(np.isfinite(side_lengths)):
+                        continue
+                    if not np.isfinite(aspect_ratio) or not np.isfinite(right_angle_score):
+                        continue
+                    if aspect_ratio < 0.72 or right_angle_score < 0.70 or area <= 0.0:
+                        continue
 
-            # ------------------------------------------------
-            # 9. PHYSICAL SIZE PLAUSIBILITY
-            # ------------------------------------------------
-            #
-            # This is deliberately broad.
-            #
-            # We do NOT hard-code a pixel size because the
-            # physical Quiet Zone can occupy different pixel
-            # dimensions depending on camera distance.
+                    # Reject contours that are mathematically large but
+                    # physically too small to provide a reliable fingerprint.
+                    shortest_side = float(np.min(side_lengths))
+                    if shortest_side < 35.0:
+                        continue
 
-            size_score = 1.0
+                    # Convert search-image coordinates back to the original
+                    # camera image before the final perspective correction.
+                    ordered_original = ordered_search / float(scale)
 
-            if area_ratio < 0.015:
-                size_score = max(
-                    0.0,
-                    min(
-                        1.0,
-                        area_ratio / 0.015,
-                    ),
-                )
+                    try:
+                        warped = _warp_quiet_zone(
+                            image,
+                            ordered_original,
+                            QUIET_ZONE_CANONICAL_SIZE,
+                        )
+                    except (cv2.error, ValueError, TypeError):
+                        continue
 
-            elif area_ratio > 0.25:
-                size_score = max(
-                    0.0,
-                    min(
-                        1.0,
-                        1.0
-                        - (
-                            (area_ratio - 0.25)
-                            / 0.20
+                    if warped is None or warped.size == 0:
+                        continue
+
+                    expected_size = (
+                        QUIET_ZONE_CANONICAL_SIZE,
+                        QUIET_ZONE_CANONICAL_SIZE,
+                    )
+                    if warped.shape[:2] != expected_size:
+                        continue
+
+                    try:
+                        metrics = _quiet_zone_surface_metrics(warped)
+                    except (cv2.error, ValueError, TypeError):
+                        continue
+
+                    edge_density = float(metrics.get("edge_density", 1.0))
+                    long_line_count = int(metrics.get("long_line_count", 999))
+                    if not np.isfinite(edge_density):
+                        continue
+
+                    # Centre position is only a weak prior from the camera
+                    # guide. It is never used to define the four corners.
+                    center = np.mean(ordered_search, axis=0)
+                    normalized_center_distance = float(
+                        np.hypot(
+                            (center[0] - search_width / 2.0) / (search_width / 2.0),
+                            (center[1] - search_height / 2.0) / (search_height / 2.0),
+                        )
+                    )
+                    center_score = max(
+                        0.0,
+                        min(
+                            1.0,
+                            1.0 - (normalized_center_distance / 0.95),
                         ),
-                    ),
-                )
+                    )
 
-            # ------------------------------------------------
-            # 10. SURFACE SIGNALS
-            # ------------------------------------------------
-            #
-            # IMPORTANT:
-            #
-            # These are deliberately WEAK signals.
-            #
-            # Natural Quiet Zone material contains texture.
-            # We therefore must NOT reject it simply because
-            # it contains edges or microstructure.
-            #
-            # A later quality stage can make the stronger
-            # "usable for fingerprinting" decision.
+                    # Size score is now broad and scale-independent.
+                    size_score = 1.0
+                    if area_ratio < 0.008:
+                        size_score = max(
+                            0.0,
+                            min(1.0, area_ratio / 0.008),
+                        )
+                    elif area_ratio > 0.35:
+                        size_score = max(
+                            0.0,
+                            min(1.0, 1.0 - ((area_ratio - 0.35) / 0.25)),
+                        )
 
-            surface_edge_score = max(
-                0.0,
-                min(
-                    1.0,
-                    (
-                        0.25
-                        - edge_density
-                    ) / 0.25,
-                ),
-            )
+                    # A true rectangular physical region should occupy most
+                    # of its minimum-area bounding rectangle.
+                    try:
+                        min_rect = cv2.minAreaRect(
+                            ordered_search.astype(np.float32)
+                        )
+                        rect_width, rect_height = min_rect[1]
+                        rect_area = float(rect_width * rect_height)
+                        rectangularity = (
+                            min(1.0, area / rect_area)
+                            if rect_area > 1e-6
+                            else 0.0
+                        )
+                    except cv2.error:
+                        rectangularity = 0.0
 
-            straight_structure_score = max(
-                0.0,
-                min(
-                    1.0,
-                    1.0
-                    - (
-                        long_line_count
-                        / 20.0
-                    ),
-                ),
-            )
+                    boundary_score = _quiet_zone_boundary_score(warped)
 
-            # ------------------------------------------------
-            # 11. FINAL CANDIDATE SCORE
-            # ------------------------------------------------
-            #
-            # Geometry dominates.
-            #
-            # This is intentional: finding the physical
-            # boundary is the primary detection problem.
+                    surface_edge_score = max(
+                        0.0,
+                        min(
+                            1.0,
+                            (0.25 - edge_density) / 0.25,
+                        ),
+                    )
+                    straight_structure_score = max(
+                        0.0,
+                        min(
+                            1.0,
+                            1.0 - (long_line_count / 20.0),
+                        ),
+                    )
 
-            score = (
-                45.0
-                * right_angle_score
-                +
-                35.0
-                * aspect_ratio
-                +
-                10.0
-                * size_score
-                +
-                5.0
-                * center_score
-                +
-                3.0
-                * surface_edge_score
-                +
-                2.0
-                * straight_structure_score
-            )
+                    # Geometry remains dominant. Search scale, ROI location
+                    # and surface appearance can assist but cannot override
+                    # weak physical geometry.
+                    score = (
+                        42.0 * right_angle_score
+                        + 28.0 * aspect_ratio
+                        + 8.0 * rectangularity
+                        + 7.0 * size_score
+                        + 5.0 * center_score
+                        + 5.0 * surface_edge_score
+                        + 3.0 * straight_structure_score
+                        + 2.0 * boundary_score
+                    )
 
-            if not np.isfinite(score):
-                continue
+                    if not np.isfinite(score):
+                        continue
 
-            candidates.append(
-                {
-                    "score": float(score),
-                    "corners": ordered.copy(),
-                    "warped": warped,
-                    "metrics": metrics,
-                    "area_ratio": float(area_ratio),
-                }
-            )
+                    candidates.append(
+                        {
+                            "score": float(score),
+                            "corners": ordered_original.copy(),
+                            "warped": warped,
+                            "metrics": metrics,
+                            "area_ratio": float(area_ratio),
+                        }
+                    )
 
     # --------------------------------------------------------
-    # 12. NO CANDIDATES
+    # 4. NO CANDIDATES
     # --------------------------------------------------------
-
     if not candidates:
         return {
             "success": False,
@@ -1096,76 +1022,50 @@ def extract_quiet_zone(
         }
 
     # --------------------------------------------------------
-    # 13. DE-DUPLICATE SAME-PHYSICAL-ZONE CANDIDATES
+    # 5. DE-DUPLICATE SAME-PHYSICAL-ZONE CANDIDATES
     # --------------------------------------------------------
-    #
-    # Different edge thresholds can produce slightly different
-    # contours around the SAME physical Quiet Zone.
-    #
-    # Those must not be treated as separate competing zones.
-
     candidates.sort(
-        key=lambda candidate:
-        candidate["score"],
+        key=lambda candidate: candidate["score"],
         reverse=True,
     )
 
     distinct_candidates = []
 
     for candidate in candidates:
-
         candidate_corners = candidate["corners"]
-
         is_duplicate = False
 
-        candidate_area = max(
-            candidate["area_ratio"],
-            1e-6,
+        candidate_area = max(candidate["area_ratio"], 1e-6)
+        candidate_scale = math.sqrt(candidate_area) * max(
+            original_width,
+            original_height,
         )
-
-        candidate_scale = math.sqrt(
-            candidate_area
-        ) * max(
-            width,
-            height,
-        )
-
-        duplicate_distance_threshold = max(
-            8.0,
-            candidate_scale * 0.08,
-        )
+        duplicate_distance_threshold = max(10.0, candidate_scale * 0.08)
 
         for existing in distinct_candidates:
-
             existing_corners = existing["corners"]
-
             if existing_corners.shape != (4, 2):
                 continue
 
+            # Compare ordered corners in the same coordinate system.
             mean_corner_distance = float(
                 np.mean(
                     np.linalg.norm(
-                        candidate_corners
-                        - existing_corners,
+                        candidate_corners - existing_corners,
                         axis=1,
                     )
                 )
             )
 
             if (
-                np.isfinite(
-                    mean_corner_distance
-                )
-                and mean_corner_distance
-                <= duplicate_distance_threshold
+                np.isfinite(mean_corner_distance)
+                and mean_corner_distance <= duplicate_distance_threshold
             ):
                 is_duplicate = True
                 break
 
         if not is_duplicate:
-            distinct_candidates.append(
-                candidate
-            )
+            distinct_candidates.append(candidate)
 
     if not distinct_candidates:
         return {
@@ -1177,60 +1077,32 @@ def extract_quiet_zone(
             "capture_context": capture_context,
         }
 
-    # Highest-scoring distinct candidate.
     best = distinct_candidates[0]
-
-    best_score = float(
-        best["score"]
-    )
+    best_score = float(best["score"])
 
     # --------------------------------------------------------
-    # 14. CONFIDENCE
+    # 6. CONFIDENCE / AMBIGUITY
     # --------------------------------------------------------
-
     base_confidence = max(
         0.0,
-        min(
-            1.0,
-            best_score / 100.0,
-        ),
+        min(1.0, best_score / 100.0),
     )
 
-    # Only compare against a genuinely DISTINCT candidate.
     if len(distinct_candidates) > 1:
-
-        second_score = float(
-            distinct_candidates[1]["score"]
-        )
-
-        score_margin = (
-            best_score
-            - second_score
-        )
+        second_score = float(distinct_candidates[1]["score"])
+        score_margin = best_score - second_score
 
         margin_confidence = max(
             0.0,
-            min(
-                1.0,
-                score_margin / 20.0,
-            ),
+            min(1.0, score_margin / 20.0),
         )
 
         combined_confidence = (
-            0.80
-            * base_confidence
-            +
-            0.20
-            * margin_confidence
+            0.80 * base_confidence
+            + 0.20 * margin_confidence
         )
 
-        # Fail closed when the best and second-best physical candidates
-        # are too close to call. The configured margin is expressed as
-        # confidence units (0.08 = 8 score points out of 100).
-        if (
-            score_margin / 100.0
-            < QUIET_ZONE_MIN_SCORE_MARGIN
-        ):
+        if (score_margin / 100.0) < QUIET_ZONE_MIN_SCORE_MARGIN:
             return {
                 "success": False,
                 "reason": "QUIET_ZONE_DETECTION_AMBIGUOUS",
@@ -1239,49 +1111,32 @@ def extract_quiet_zone(
                 "image": None,
                 "capture_context": capture_context,
             }
-
     else:
-        # With only one distinct geometric candidate,
-        # there is no ambiguity penalty.
-        combined_confidence = (
-            base_confidence
-        )
+        combined_confidence = base_confidence
 
     # --------------------------------------------------------
-    # 15. FAIL CLOSED ON LOW CONFIDENCE
+    # 7. FAIL CLOSED ON LOW CONFIDENCE
     # --------------------------------------------------------
-
-    if (
-        combined_confidence
-        < QUIET_ZONE_MIN_CONFIDENCE
-    ):
+    if combined_confidence < QUIET_ZONE_MIN_CONFIDENCE:
         return {
             "success": False,
             "reason": "QUIET_ZONE_DETECTION_CONFIDENCE_TOO_LOW",
-            "confidence": round(
-                combined_confidence,
-                4,
-            ),
+            "confidence": round(combined_confidence, 4),
             "corners": None,
             "image": None,
             "capture_context": capture_context,
         }
 
-        # --------------------------------------------------------
-    # 16. CANONICAL EXTRACTION
+    # --------------------------------------------------------
+    # 8. CANONICAL EXTRACTION
     # --------------------------------------------------------
 
-    canonical_size = (
-        QUIET_ZONE_CANONICAL_SIZE
-    )
+    canonical_size = QUIET_ZONE_CANONICAL_SIZE
 
     try:
         canonical = best["warped"]
 
-        if (
-            canonical is None
-            or canonical.size == 0
-        ):
+        if canonical is None or canonical.size == 0:
             return {
                 "success": False,
                 "reason": "CANONICAL_EXTRACTION_FAILED",
@@ -1291,24 +1146,14 @@ def extract_quiet_zone(
                 "capture_context": capture_context,
             }
 
-        if canonical.shape[:2] != (
-            canonical_size,
-            canonical_size,
-        ):
+        if canonical.shape[:2] != (canonical_size, canonical_size):
             canonical = cv2.resize(
                 canonical,
-                (
-                    canonical_size,
-                    canonical_size,
-                ),
+                (canonical_size, canonical_size),
                 interpolation=cv2.INTER_CUBIC,
             )
 
-    except (
-        cv2.error,
-        ValueError,
-        TypeError,
-    ):
+    except (cv2.error, ValueError, TypeError):
         return {
             "success": False,
             "reason": "CANONICAL_RESIZE_FAILED",
@@ -1317,54 +1162,19 @@ def extract_quiet_zone(
             "image": None,
             "capture_context": capture_context,
         }
-    
-            
-
-        canonical = cv2.resize(
-            canonical,
-            (
-                canonical_size,
-                canonical_size,
-            ),
-            interpolation=cv2.INTER_CUBIC,
-        )
-
-    except (
-        cv2.error,
-        ValueError,
-        TypeError,
-    ):
-        return {
-            "success": False,
-            "reason": "CANONICAL_RESIZE_FAILED",
-            "confidence": 0.0,
-            "corners": None,
-            "image": None,
-            "capture_context": capture_context,
-        }
-
-    # --------------------------------------------------------
-    # 17. FINAL RESULT
-    # --------------------------------------------------------
 
     return {
         "success": True,
         "reason": "QUIET_ZONE_DETECTED",
-        "confidence": round(
-            combined_confidence,
-            4,
-        ),
+        "confidence": round(combined_confidence, 4),
         "corners": [
-            [
-                round(float(point[0]), 2),
-                round(float(point[1]), 2),
-            ]
+            [round(float(point[0]), 2), round(float(point[1]), 2)]
             for point in best["corners"]
         ],
         "image": canonical,
         "capture_context": capture_context,
         "metrics": best["metrics"],
-    }   
+    }
 
 def normalize_image(image, target_size=1024):
     if image is None:
