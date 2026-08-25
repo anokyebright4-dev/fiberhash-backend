@@ -557,8 +557,7 @@ def _quiet_zone_surface_metrics(warped):
         "saturation_std": saturation_std,
         "value_std": value_std,
     }
-    
-def extract_quiet_zone(
+ def extract_quiet_zone(
     image,
     capture_context="factory_registration",
 ):
@@ -726,9 +725,26 @@ def extract_quiet_zone(
                 / float(width * height)
             )
 
-            # Reject extremely small objects and contours
-            # representing almost the entire photograph.
-            if area_ratio < 0.01:
+            # The Quiet Zone must not be required to occupy a
+            # fixed 1% of the entire camera photograph.
+            # Full-resolution phone captures contain substantial
+            # surrounding image area, so that fixed ratio can
+            # discard a genuine physical Quiet Zone before the
+            # four-corner geometry checks are reached.
+            #
+            # Retain a conservative lower bound for very small
+            # candidates, while allowing the minimum ratio to fall
+            # for large camera frames. The existing geometric and
+            # confidence checks remain unchanged.
+            min_area_ratio = min(
+                0.01,
+                max(
+                    0.0025,
+                    10000.0 / float(width * height),
+                ),
+            )
+
+            if area_ratio < min_area_ratio:
                 continue
 
             if area_ratio > 0.45:
@@ -1347,7 +1363,7 @@ def extract_quiet_zone(
         "image": canonical,
         "capture_context": capture_context,
         "metrics": best["metrics"],
-    }
+    }   
 
 def normalize_image(image, target_size=1024):
     if image is None:
