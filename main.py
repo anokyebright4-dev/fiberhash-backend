@@ -557,7 +557,8 @@ def _quiet_zone_surface_metrics(warped):
         "saturation_std": saturation_std,
         "value_std": value_std,
     }
- def extract_quiet_zone(
+    
+def extract_quiet_zone(
     image,
     capture_context="factory_registration",
 ):
