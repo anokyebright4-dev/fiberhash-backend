@@ -532,13 +532,18 @@ def _quiet_zone_surface_metrics(warped):
     long_line_count = 0
 
     if lines is not None:
-        for line in lines[:, 0]:
-            line_length = float(
-                np.hypot(
-                    line[2] - line[0],
-                    line[3] - line[1],
+        lines = np.asarray(lines)
+
+        if lines.size > 0:
+            lines = lines.reshape(-1, 4)
+
+            for line in lines:
+                line_length = float(
+                    np.hypot(
+                        line[2] - line[0],
+                        line[3] - line[1],
+                    )
                 )
-            )
 
             if line_length >= width * 0.15:
                 long_line_count += 1
