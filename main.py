@@ -532,26 +532,16 @@ def _quiet_zone_surface_metrics(warped):
     long_line_count = 0
 
     if lines is not None:
-        lines_array = np.asarray(lines)
-
-        # HoughLinesP normally returns (N, 1, 4), but
-        # some inputs/versions can produce (N, 4).
-        # Normalize both forms to one line per row: (N, 4).
-        if lines_array.size > 0:
-            lines_array = lines_array.reshape(-1, 4)
-
-            for line in lines_array:
-                x1, y1, x2, y2 = line
-
-                line_length = float(
-                    np.hypot(
-                        x2 - x1,
-                        y2 - y1,
-                    )
+        for line in lines[:, 0]:
+            line_length = float(
+                np.hypot(
+                    line[2] - line[0],
+                    line[3] - line[1],
                 )
+            )
 
-                if line_length >= width * 0.15:
-                    long_line_count += 1
+            if line_length >= width * 0.15:
+                long_line_count += 1
 
     saturation_std = float(
         np.std(inner_hsv[:, :, 1])
@@ -571,16 +561,6 @@ def _quiet_zone_surface_metrics(warped):
 # Surgical camera/JPG Quiet Zone fix.
 # Replace ONLY the existing extract_quiet_zone() function with this block.
 # No other backend section is to be replaced.
-
-# TESTED SURGICAL QUIET-ZONE FIX
-# Replace ONLY the existing extract_quiet_zone() function.
-# Do not replace the rest of main.py with this file.
-#
-# Validation performed against:
-#   - IMG_2507.jpeg  -> PASS
-#   - IMG_2516 image2 marked outline.png -> PASS
-#
-# Both returned a 512x512 canonical Quiet Zone extraction.
 
 def extract_quiet_zone(
     image,
@@ -842,8 +822,8 @@ def extract_quiet_zone(
                 # lower, but absolute geometry and confidence remain strict.
                 if area_ratio < 0.003:
                     continue
-                # Reject contours occupying too much of the image/ROI.
-                # The Quiet Zone is a physical patch, not a large package region.
+                # A valid Quiet Zone is a physical patch, not a contour
+                # spanning a large fraction of the package/photo.
                 if area_ratio > 0.35:
                     continue
 
@@ -1002,13 +982,11 @@ def extract_quiet_zone(
                             1.0 - (long_line_count / 20.0),
                         ),
                     )
-                    # --------------------------------------------------------
-                    # QUIET ZONE CANDIDATE SCORING
-                    # --------------------------------------------------------
-                    # Geometry remains dominant.
-                    # Centre position is only a weak camera-guide prior.
-                    # Surface texture helps distinguish the physical Quiet
-                    # Zone from flat camera/UI regions.
+
+                    # Quiet Zone fingerprinting requires a textured physical
+                    # surface. Extremely flat regions (camera UI / blank
+                    # controls) are therefore weaker candidates, while highly
+                    # variable printed regions are also weaker candidates.
                     value_std = float(metrics.get("value_std", 999.0))
                     texture_score = max(
                         0.0,
@@ -1018,6 +996,8 @@ def extract_quiet_zone(
                         ),
                     )
 
+                    # Geometry remains dominant. The camera-guide centre is
+                    # a ranking prior only; it never defines the corners.
                     score = (
                         39.0 * right_angle_score
                         + 22.0 * aspect_ratio
@@ -1046,256 +1026,6 @@ def extract_quiet_zone(
     # --------------------------------------------------------
     # 4. NO CANDIDATES
     # --------------------------------------------------------
-    # 12. DARK-BOUNDARY FALLBACK
-    # --------------------------------------------------------
-    # Some phone JPEG captures preserve the physical Quiet Zone border
-    # as a dark filled boundary rather than a clean Canny quadrilateral.
-    # If normal edge discovery found nothing, inspect dark connected
-    # regions at several conservative thresholds. This is still geometry-
-    # gated; it never accepts a region without four-corner validation.
-
-    if not candidates:
-        gray_fallback = gray
-
-        for dark_threshold in (40, 50, 60, 70, 80):
-            dark_mask = cv2.inRange(
-                gray_fallback,
-                0,
-                dark_threshold,
-            )
-
-            dark_mask = cv2.morphologyEx(
-                dark_mask,
-                cv2.MORPH_CLOSE,
-                np.ones((9, 9), dtype=np.uint8),
-                iterations=1,
-            )
-
-            dark_contours, _ = cv2.findContours(
-                dark_mask,
-                cv2.RETR_EXTERNAL,
-                cv2.CHAIN_APPROX_SIMPLE,
-            )
-
-            for contour in dark_contours:
-                if contour is None or len(contour) < 4:
-                    continue
-
-                contour_area = float(cv2.contourArea(contour))
-                if not np.isfinite(contour_area):
-                    continue
-
-                area_ratio = contour_area / float(search_width * search_height)
-
-                if area_ratio < 0.02 or area_ratio > 0.35:
-                    continue
-
-                perimeter = float(cv2.arcLength(contour, True))
-                if not np.isfinite(perimeter) or perimeter <= 0.0:
-                    continue
-
-                approximation = cv2.approxPolyDP(
-                    contour,
-                    0.01 * perimeter,
-                    True,
-                )
-
-                if len(approximation) != 4:
-                    continue
-
-                if not cv2.isContourConvex(approximation):
-                    continue
-
-                candidate_points = approximation.reshape(
-                    4,
-                    2,
-                ).astype(np.float32)
-
-                geometry = _quiet_zone_geometry(candidate_points)
-
-                if geometry is None:
-                    continue
-
-                (
-                    ordered,
-                    side_lengths,
-                    aspect_ratio,
-                    right_angle_score,
-                    area,
-                ) = geometry
-
-                if (
-                    aspect_ratio < 0.72
-                    or right_angle_score < 0.70
-                    or area <= 0.0
-                ):
-                    continue
-
-                try:
-                    warped = _warp_quiet_zone(
-                        image,
-                        ordered_original,
-                        QUIET_ZONE_CANONICAL_SIZE,
-                    )
-
-                    if warped is None or warped.size == 0:
-                        continue
-
-                    metrics = _quiet_zone_surface_metrics(
-                        warped
-                    )
-
-                    edge_density = float(
-                        metrics.get(
-                            "edge_density",
-                            1.0,
-                        )
-                    )
-
-                    long_line_count = int(
-                        metrics.get(
-                            "long_line_count",
-                            999,
-                        )
-                    )
-
-                    if not np.isfinite(edge_density):
-                        continue
-
-                except (
-                    cv2.error,
-                    ValueError,
-                    TypeError,
-                ):
-                    continue
-
-                # Fallback geometry is measured in search-image coordinates.
-                # Convert to original camera-image coordinates before warping.
-                ordered_original = ordered / float(scale)
-
-                center = np.mean(
-                    ordered,
-                    axis=0,
-                )
-
-                if not np.all(
-                    np.isfinite(center)
-                ):
-                    continue
-
-                normalized_center_distance = float(
-                    np.hypot(
-                        (
-                            center[0]
-                            - search_width / 2.0
-                        ) / (search_width / 2.0),
-                        (
-                            center[1]
-                            - search_height / 2.0
-                        ) / (search_height / 2.0),
-                    )
-                )
-
-                center_score = max(
-                    0.0,
-                    min(
-                        1.0,
-                        1.0
-                        - (
-                            normalized_center_distance
-                            / 0.90
-                        ),
-                    ),
-                )
-
-                size_score = 1.0
-
-                if area_ratio < 0.015:
-                    size_score = max(
-                        0.0,
-                        min(
-                            1.0,
-                            area_ratio / 0.015,
-                        ),
-                    )
-
-                elif area_ratio > 0.25:
-                    size_score = max(
-                        0.0,
-                        min(
-                            1.0,
-                            1.0
-                            - (
-                                (area_ratio - 0.25)
-                                / 0.20
-                            ),
-                        ),
-                    )
-
-                surface_edge_score = max(
-                    0.0,
-                    min(
-                        1.0,
-                        (
-                            0.25
-                            - edge_density
-                        ) / 0.25,
-                    ),
-                )
-
-                straight_structure_score = max(
-                    0.0,
-                    min(
-                        1.0,
-                        1.0
-                        - (
-                            long_line_count
-                            / 20.0
-                        ),
-                    ),
-                )
-
-                score = (
-                    45.0
-                    * right_angle_score
-                    +
-                    35.0
-                    * aspect_ratio
-                    +
-                    10.0
-                    * size_score
-                    +
-                    5.0
-                    * center_score
-                    +
-                    3.0
-                    * surface_edge_score
-                    +
-                    2.0
-                    * straight_structure_score
-                )
-
-                if not np.isfinite(score):
-                    continue
-
-                candidates.append(
-                    {
-                        "score": float(score),
-                        "corners": ordered_original.copy(),
-                        "warped": warped,
-                        "metrics": metrics,
-                        "area_ratio": float(
-                            area_ratio
-                        ),
-                    }
-                )
-
-                # The first strong dark-boundary candidate is enough
-                # to enter the normal de-duplication/ambiguity pipeline.
-                break
-
-            if candidates:
-                break
     if not candidates:
         return {
             "success": False,
@@ -1459,7 +1189,7 @@ def extract_quiet_zone(
         "image": canonical,
         "capture_context": capture_context,
         "metrics": best["metrics"],
-    }           
+    }
 
 def normalize_image(image, target_size=1024):
     if image is None:
@@ -5031,19 +4761,22 @@ async def debug_quiet_zone(
                 0.0,
             )
         )
-        response.headers["X-QZ-Code-Version"] = "QZ-2026-08-26-TEST-A"
+
         return response
 
     except HTTPException:
         raise
 
     except Exception as e:
-        import traceback
 
-        print("QUIET ZONE DEBUG FAILED:", repr(e))
-        traceback.print_exc()
+        print(
+            "QUIET ZONE DEBUG FAILED:",
+            str(e),
+        )
 
         raise HTTPException(
             status_code=500,
-            detail="Quiet Zone diagnostic failed."
+            detail=(
+                "Quiet Zone diagnostic failed."
+            ),
         )
