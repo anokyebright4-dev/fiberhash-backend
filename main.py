@@ -5027,13 +5027,13 @@ async def debug_quiet_zone(
     except HTTPException:
         raise
 
-   except Exception as e:
-    import traceback
+    except Exception as e:
+        import traceback
 
-    print("QUIET ZONE DEBUG FAILED:", repr(e))
-    traceback.print_exc()
+        print("QUIET ZONE DEBUG FAILED:", repr(e))
+        traceback.print_exc()
 
-    raise HTTPException(
-        status_code=500,
-        detail="Quiet Zone diagnostic failed."
-    )
+        raise HTTPException(
+            status_code=500,
+            detail="Quiet Zone diagnostic failed."
+        )
