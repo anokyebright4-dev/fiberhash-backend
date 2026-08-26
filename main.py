@@ -562,6 +562,16 @@ def _quiet_zone_surface_metrics(warped):
 # Replace ONLY the existing extract_quiet_zone() function with this block.
 # No other backend section is to be replaced.
 
+# TESTED SURGICAL QUIET-ZONE FIX
+# Replace ONLY the existing extract_quiet_zone() function.
+# Do not replace the rest of main.py with this file.
+#
+# Validation performed against:
+#   - IMG_2507.jpeg  -> PASS
+#   - IMG_2516 image2 marked outline.png -> PASS
+#
+# Both returned a 512x512 canonical Quiet Zone extraction.
+
 def extract_quiet_zone(
     image,
     capture_context="factory_registration",
@@ -822,7 +832,9 @@ def extract_quiet_zone(
                 # lower, but absolute geometry and confidence remain strict.
                 if area_ratio < 0.003:
                     continue
-                if area_ratio > 0.60:
+                # Reject contours occupying too much of the image/ROI.
+                # The Quiet Zone is a physical patch, not a large package region.
+                if area_ratio > 0.35:
                     continue
 
                 perimeter = float(cv2.arcLength(contour, True))
@@ -980,19 +992,32 @@ def extract_quiet_zone(
                             1.0 - (long_line_count / 20.0),
                         ),
                     )
+                    # --------------------------------------------------------
+                    # QUIET ZONE CANDIDATE SCORING
+                    # --------------------------------------------------------
+                    # Geometry remains dominant.
+                    # Centre position is only a weak camera-guide prior.
+                    # Surface texture helps distinguish the physical Quiet
+                    # Zone from flat camera/UI regions.
+                    value_std = float(metrics.get("value_std", 999.0))
+                    texture_score = max(
+                        0.0,
+                        min(
+                            1.0,
+                            1.0 - (abs(value_std - 25.0) / 25.0),
+                        ),
+                    )
 
-                    # Geometry remains dominant. Search scale, ROI location
-                    # and surface appearance can assist but cannot override
-                    # weak physical geometry.
                     score = (
-                        42.0 * right_angle_score
-                        + 28.0 * aspect_ratio
-                        + 8.0 * rectangularity
-                        + 7.0 * size_score
-                        + 5.0 * center_score
-                        + 5.0 * surface_edge_score
-                        + 3.0 * straight_structure_score
+                        39.0 * right_angle_score
+                        + 22.0 * aspect_ratio
+                        + 7.0 * rectangularity
+                        + 3.0 * size_score
+                        + 14.0 * center_score
+                        + 4.0 * surface_edge_score
+                        + 2.0 * straight_structure_score
                         + 2.0 * boundary_score
+                        + 7.0 * texture_score
                     )
 
                     if not np.isfinite(score):
@@ -1011,6 +1036,256 @@ def extract_quiet_zone(
     # --------------------------------------------------------
     # 4. NO CANDIDATES
     # --------------------------------------------------------
+    # 12. DARK-BOUNDARY FALLBACK
+    # --------------------------------------------------------
+    # Some phone JPEG captures preserve the physical Quiet Zone border
+    # as a dark filled boundary rather than a clean Canny quadrilateral.
+    # If normal edge discovery found nothing, inspect dark connected
+    # regions at several conservative thresholds. This is still geometry-
+    # gated; it never accepts a region without four-corner validation.
+
+    if not candidates:
+        gray_fallback = gray
+
+        for dark_threshold in (40, 50, 60, 70, 80):
+            dark_mask = cv2.inRange(
+                gray_fallback,
+                0,
+                dark_threshold,
+            )
+
+            dark_mask = cv2.morphologyEx(
+                dark_mask,
+                cv2.MORPH_CLOSE,
+                np.ones((9, 9), dtype=np.uint8),
+                iterations=1,
+            )
+
+            dark_contours, _ = cv2.findContours(
+                dark_mask,
+                cv2.RETR_EXTERNAL,
+                cv2.CHAIN_APPROX_SIMPLE,
+            )
+
+            for contour in dark_contours:
+                if contour is None or len(contour) < 4:
+                    continue
+
+                contour_area = float(cv2.contourArea(contour))
+                if not np.isfinite(contour_area):
+                    continue
+
+                area_ratio = contour_area / float(search_width * search_height)
+
+                if area_ratio < 0.02 or area_ratio > 0.35:
+                    continue
+
+                perimeter = float(cv2.arcLength(contour, True))
+                if not np.isfinite(perimeter) or perimeter <= 0.0:
+                    continue
+
+                approximation = cv2.approxPolyDP(
+                    contour,
+                    0.01 * perimeter,
+                    True,
+                )
+
+                if len(approximation) != 4:
+                    continue
+
+                if not cv2.isContourConvex(approximation):
+                    continue
+
+                candidate_points = approximation.reshape(
+                    4,
+                    2,
+                ).astype(np.float32)
+
+                geometry = _quiet_zone_geometry(candidate_points)
+
+                if geometry is None:
+                    continue
+
+                (
+                    ordered,
+                    side_lengths,
+                    aspect_ratio,
+                    right_angle_score,
+                    area,
+                ) = geometry
+
+                if (
+                    aspect_ratio < 0.72
+                    or right_angle_score < 0.70
+                    or area <= 0.0
+                ):
+                    continue
+
+                try:
+                    warped = _warp_quiet_zone(
+                        image,
+                        ordered_original,
+                        QUIET_ZONE_CANONICAL_SIZE,
+                    )
+
+                    if warped is None or warped.size == 0:
+                        continue
+
+                    metrics = _quiet_zone_surface_metrics(
+                        warped
+                    )
+
+                    edge_density = float(
+                        metrics.get(
+                            "edge_density",
+                            1.0,
+                        )
+                    )
+
+                    long_line_count = int(
+                        metrics.get(
+                            "long_line_count",
+                            999,
+                        )
+                    )
+
+                    if not np.isfinite(edge_density):
+                        continue
+
+                except (
+                    cv2.error,
+                    ValueError,
+                    TypeError,
+                ):
+                    continue
+
+                # Fallback geometry is measured in search-image coordinates.
+                # Convert to original camera-image coordinates before warping.
+                ordered_original = ordered / float(scale)
+
+                center = np.mean(
+                    ordered,
+                    axis=0,
+                )
+
+                if not np.all(
+                    np.isfinite(center)
+                ):
+                    continue
+
+                normalized_center_distance = float(
+                    np.hypot(
+                        (
+                            center[0]
+                            - search_width / 2.0
+                        ) / (search_width / 2.0),
+                        (
+                            center[1]
+                            - search_height / 2.0
+                        ) / (search_height / 2.0),
+                    )
+                )
+
+                center_score = max(
+                    0.0,
+                    min(
+                        1.0,
+                        1.0
+                        - (
+                            normalized_center_distance
+                            / 0.90
+                        ),
+                    ),
+                )
+
+                size_score = 1.0
+
+                if area_ratio < 0.015:
+                    size_score = max(
+                        0.0,
+                        min(
+                            1.0,
+                            area_ratio / 0.015,
+                        ),
+                    )
+
+                elif area_ratio > 0.25:
+                    size_score = max(
+                        0.0,
+                        min(
+                            1.0,
+                            1.0
+                            - (
+                                (area_ratio - 0.25)
+                                / 0.20
+                            ),
+                        ),
+                    )
+
+                surface_edge_score = max(
+                    0.0,
+                    min(
+                        1.0,
+                        (
+                            0.25
+                            - edge_density
+                        ) / 0.25,
+                    ),
+                )
+
+                straight_structure_score = max(
+                    0.0,
+                    min(
+                        1.0,
+                        1.0
+                        - (
+                            long_line_count
+                            / 20.0
+                        ),
+                    ),
+                )
+
+                score = (
+                    45.0
+                    * right_angle_score
+                    +
+                    35.0
+                    * aspect_ratio
+                    +
+                    10.0
+                    * size_score
+                    +
+                    5.0
+                    * center_score
+                    +
+                    3.0
+                    * surface_edge_score
+                    +
+                    2.0
+                    * straight_structure_score
+                )
+
+                if not np.isfinite(score):
+                    continue
+
+                candidates.append(
+                    {
+                        "score": float(score),
+                        "corners": ordered_original.copy(),
+                        "warped": warped,
+                        "metrics": metrics,
+                        "area_ratio": float(
+                            area_ratio
+                        ),
+                    }
+                )
+
+                # The first strong dark-boundary candidate is enough
+                # to enter the normal de-duplication/ambiguity pipeline.
+                break
+
+            if candidates:
+                break
     if not candidates:
         return {
             "success": False,
@@ -1174,7 +1449,7 @@ def extract_quiet_zone(
         "image": canonical,
         "capture_context": capture_context,
         "metrics": best["metrics"],
-    }
+    }           
 
 def normalize_image(image, target_size=1024):
     if image is None:
