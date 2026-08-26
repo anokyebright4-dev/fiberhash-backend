@@ -5031,7 +5031,7 @@ async def debug_quiet_zone(
                 0.0,
             )
         )
-
+        response.headers["X-QZ-Code-Version"] = "QZ-2026-08-26-TEST-A"
         return response
 
     except HTTPException:
