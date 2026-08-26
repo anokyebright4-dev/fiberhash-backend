@@ -532,16 +532,26 @@ def _quiet_zone_surface_metrics(warped):
     long_line_count = 0
 
     if lines is not None:
-        for line in lines[:, 0]:
-            line_length = float(
-                np.hypot(
-                    line[2] - line[0],
-                    line[3] - line[1],
-                )
-            )
+        lines_array = np.asarray(lines)
 
-            if line_length >= width * 0.15:
-                long_line_count += 1
+        # HoughLinesP normally returns (N, 1, 4), but
+        # some inputs/versions can produce (N, 4).
+        # Normalize both forms to one line per row: (N, 4).
+        if lines_array.size > 0:
+            lines_array = lines_array.reshape(-1, 4)
+
+            for line in lines_array:
+                x1, y1, x2, y2 = line
+
+                line_length = float(
+                    np.hypot(
+                        x2 - x1,
+                        y2 - y1,
+                    )
+                )
+
+                if line_length >= width * 0.15:
+                    long_line_count += 1
 
     saturation_std = float(
         np.std(inner_hsv[:, :, 1])
