@@ -1040,112 +1040,180 @@ def extract_quiet_zone(
             "image": None,
             "capture_context": capture_context,
         }
-
+        
+    #---------------------------------------------------------
+    # 5. SELECT THE PHYSICAL QUIET ZONE
     # --------------------------------------------------------
-    # 5. DE-DUPLICATE SAME-PHYSICAL-ZONE CANDIDATES
+    #
+    # A single uploaded photograph can legitimately generate
+    # multiple mathematical contour candidates. Those are NOT
+    # multiple physical Quiet Zones.
+    #
+    # When the physical-surface detector has identified the
+    # Quiet Zone, that candidate is authoritative. Do not allow
+    # secondary contour interpretations of the same photograph
+    # to trigger QUIET_ZONE_DETECTION_AMBIGUOUS.
     # --------------------------------------------------------
-    candidates.sort(
-        key=lambda candidate: candidate["score"],
-        reverse=True,
-    )
 
-    distinct_candidates = []
+    physical_candidates = [
+        candidate
+        for candidate in candidates
+        if candidate.get("physical_surface") is True
+    ]
 
-    for candidate in candidates:
-        candidate_corners = candidate["corners"]
-        is_duplicate = False
-
-        candidate_area = max(candidate["area_ratio"], 1e-6)
-        candidate_scale = math.sqrt(candidate_area) * max(
-            original_width,
-            original_height,
+    if physical_candidates:
+        physical_candidates.sort(
+            key=lambda candidate: candidate["score"],
+            reverse=True,
         )
-        duplicate_distance_threshold = max(10.0, candidate_scale * 0.08)
 
-        for existing in distinct_candidates:
-            existing_corners = existing["corners"]
-            if existing_corners.shape != (4, 2):
-                continue
+        best = physical_candidates[0]
+        best_score = float(best["score"])
 
-            # Compare ordered corners in the same coordinate system.
-            mean_corner_distance = float(
-                np.mean(
-                    np.linalg.norm(
-                        candidate_corners - existing_corners,
-                        axis=1,
-                    )
-                )
+        combined_confidence = max(
+            0.0,
+            min(1.0, best_score / 100.0),
+        )
+
+    else:
+        # ----------------------------------------------------
+        # 5B. NORMAL CONTOUR CANDIDATE DE-DUPLICATION
+        # ----------------------------------------------------
+
+        candidates.sort(
+            key=lambda candidate: candidate["score"],
+            reverse=True,
+        )
+
+        distinct_candidates = []
+
+        for candidate in candidates:
+            candidate_corners = candidate["corners"]
+            is_duplicate = False
+
+            candidate_area = max(
+                candidate["area_ratio"],
+                1e-6,
             )
 
-            if (
-                np.isfinite(mean_corner_distance)
-                and mean_corner_distance <= duplicate_distance_threshold
-            ):
-                is_duplicate = True
-                break
+            candidate_scale = math.sqrt(
+                candidate_area
+            ) * max(
+                original_width,
+                original_height,
+            )
 
-        if not is_duplicate:
-            distinct_candidates.append(candidate)
+            duplicate_distance_threshold = max(
+                10.0,
+                candidate_scale * 0.08,
+            )
 
-    if not distinct_candidates:
-        return {
-            "success": False,
-            "reason": "QUIET_ZONE_CANDIDATE_CLUSTERING_FAILED",
-            "confidence": 0.0,
-            "corners": None,
-            "image": None,
-            "capture_context": capture_context,
-        }
+            for existing in distinct_candidates:
+                existing_corners = existing["corners"]
 
-    best = distinct_candidates[0]
-    best_score = float(best["score"])
+                if existing_corners.shape != (4, 2):
+                    continue
 
-    # --------------------------------------------------------
-    # 6. CONFIDENCE / AMBIGUITY
-    # --------------------------------------------------------
-    base_confidence = max(
-        0.0,
-        min(1.0, best_score / 100.0),
-    )
+                mean_corner_distance = float(
+                    np.mean(
+                        np.linalg.norm(
+                            candidate_corners - existing_corners,
+                            axis=1,
+                        )
+                    )
+                )
 
-    if len(distinct_candidates) > 1:
-        second_score = float(distinct_candidates[1]["score"])
-        score_margin = best_score - second_score
+                if (
+                    np.isfinite(mean_corner_distance)
+                    and mean_corner_distance
+                    <= duplicate_distance_threshold
+                ):
+                    is_duplicate = True
+                    break
 
-        margin_confidence = max(
-            0.0,
-            min(1.0, score_margin / 20.0),
-        )
+            if not is_duplicate:
+                distinct_candidates.append(candidate)
 
-        combined_confidence = (
-            0.80 * base_confidence
-            + 0.20 * margin_confidence
-        )
-
-        if (score_margin / 100.0) < QUIET_ZONE_MIN_SCORE_MARGIN:
+        if not distinct_candidates:
             return {
                 "success": False,
-                "reason": "QUIET_ZONE_DETECTION_AMBIGUOUS",
-                "confidence": round(combined_confidence, 4),
+                "reason": "QUIET_ZONE_CANDIDATE_CLUSTERING_FAILED",
+                "confidence": 0.0,
                 "corners": None,
                 "image": None,
                 "capture_context": capture_context,
             }
-    else:
-        combined_confidence = base_confidence
+
+        best = distinct_candidates[0]
+        best_score = float(best["score"])
+
+        # ----------------------------------------------------
+        # 6. CONFIDENCE / AMBIGUITY
+        # ----------------------------------------------------
+
+        base_confidence = max(
+            0.0,
+            min(1.0, best_score / 100.0),
+        )
+
+        if len(distinct_candidates) > 1:
+            second_score = float(
+                distinct_candidates[1]["score"]
+            )
+
+            score_margin = (
+                best_score - second_score
+            )
+
+            margin_confidence = max(
+                0.0,
+                min(
+                    1.0,
+                    score_margin / 20.0,
+                ),
+            )
+
+            combined_confidence = (
+                0.80 * base_confidence
+                + 0.20 * margin_confidence
+            )
+
+            if (
+                score_margin / 100.0
+                < QUIET_ZONE_MIN_SCORE_MARGIN
+            ):
+                return {
+                    "success": False,
+                    "reason": "QUIET_ZONE_DETECTION_AMBIGUOUS",
+                    "confidence": round(
+                        combined_confidence,
+                        4,
+                    ),
+                    "corners": None,
+                    "image": None,
+                    "capture_context": capture_context,
+                }
+
+        else:
+            combined_confidence = base_confidence
 
     # --------------------------------------------------------
     # 7. FAIL CLOSED ON LOW CONFIDENCE
     # --------------------------------------------------------
+
     if combined_confidence < QUIET_ZONE_MIN_CONFIDENCE:
         return {
             "success": False,
             "reason": "QUIET_ZONE_DETECTION_CONFIDENCE_TOO_LOW",
-            "confidence": round(combined_confidence, 4),
+            "confidence": round(
+                combined_confidence,
+                4,
+            ),
             "corners": None,
             "image": None,
             "capture_context": capture_context,
         }
+   
 
     # --------------------------------------------------------
     # 8. CANONICAL EXTRACTION
