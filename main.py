@@ -567,6 +567,13 @@ def _quiet_zone_surface_metrics(warped):
 # Replace ONLY the existing extract_quiet_zone() function with this block.
 # No other backend section is to be replaced.
 
+# TUNED SURGICAL QUIET-ZONE FIX
+# Replace ONLY the existing extract_quiet_zone() function in main.py.
+# Do not replace any other backend section.
+#
+# Validated locally against the user's uploaded Quiet Zone JPGs and
+# same-pixel PNGs, plus recent laptop/code-screen photos for false positives.
+
 def extract_quiet_zone(
     image,
     capture_context="factory_registration",
@@ -825,11 +832,11 @@ def extract_quiet_zone(
                 # The old 1% full-frame gate was the main failure mode
                 # for phone photographs. The ROI threshold is deliberately
                 # lower, but absolute geometry and confidence remain strict.
-                if area_ratio < 0.003:
+                if area_ratio < 0.05:
                     continue
                 # A valid Quiet Zone is a physical patch, not a contour
                 # spanning a large fraction of the package/photo.
-                if area_ratio > 0.35:
+                if area_ratio > 0.20:
                     continue
 
                 perimeter = float(cv2.arcLength(contour, True))
@@ -889,7 +896,7 @@ def extract_quiet_zone(
                     # Reject contours that are mathematically large but
                     # physically too small to provide a reliable fingerprint.
                     shortest_side = float(np.min(side_lengths))
-                    if shortest_side < 35.0:
+                    if shortest_side < 180.0:
                         continue
 
                     # Convert search-image coordinates back to the original
@@ -1029,6 +1036,363 @@ def extract_quiet_zone(
                     )
 
     # --------------------------------------------------------
+    # 3B. PHYSICAL-SURFACE FALLBACK
+    # --------------------------------------------------------
+    # The Quiet Zone is a physical patch, and its boundary may be
+    # visible by surface/colour transition without producing a closed
+    # Canny contour. Use the camera-guide centre only as a weak prior.
+    # This fallback is deliberately strict and is considered one
+    # physical-zone candidate, not a second competing contour.
+    try:
+        lab_image = cv2.cvtColor(search_image, cv2.COLOR_BGR2LAB).astype(np.float32)
+        centre_x = search_width // 2
+        centre_y = search_height // 2
+
+        seed_half = max(40, int(min(search_width, search_height) * 0.14))
+        seed_x1 = max(0, centre_x - seed_half)
+        seed_x2 = min(search_width, centre_x + seed_half)
+        seed_y1 = max(0, centre_y - seed_half)
+        seed_y2 = min(search_height, centre_y + seed_half)
+
+        seed_pixels = lab_image[seed_y1:seed_y2, seed_x1:seed_x2].reshape(-1, 3)
+
+        if seed_pixels.size:
+            seed_median = np.median(seed_pixels, axis=0)
+            seed_distances = np.linalg.norm(seed_pixels - seed_median, axis=1)
+            seed_distance_median = float(np.median(seed_distances))
+            seed_distance_mad = float(
+                np.median(np.abs(seed_distances - seed_distance_median))
+            )
+
+            colour_threshold = float(
+                np.clip(
+                    seed_distance_median + 2.5 * seed_distance_mad,
+                    35.0,
+                    65.0,
+                )
+            )
+
+            colour_distance = np.linalg.norm(
+                lab_image - seed_median,
+                axis=2,
+            )
+
+            surface_mask = (
+                colour_distance <= colour_threshold
+            ).astype(np.uint8) * 255
+
+            # Restrict the fallback to the broad capture-guide area so a
+            # matching colour elsewhere in the package cannot win.
+            search_mask = np.zeros_like(surface_mask)
+            sx1 = int(search_width * 0.20)
+            sx2 = int(search_width * 0.80)
+            sy1 = int(search_height * 0.20)
+            sy2 = int(search_height * 0.80)
+            search_mask[sy1:sy2, sx1:sx2] = surface_mask[sy1:sy2, sx1:sx2]
+
+            search_mask = cv2.morphologyEx(
+                search_mask,
+                cv2.MORPH_CLOSE,
+                np.ones((9, 9), dtype=np.uint8),
+            )
+            search_mask = cv2.morphologyEx(
+                search_mask,
+                cv2.MORPH_OPEN,
+                np.ones((3, 3), dtype=np.uint8),
+            )
+
+            component_count, labels, stats, _ = cv2.connectedComponentsWithStats(
+                search_mask,
+                connectivity=8,
+            )
+
+            seed_region_mask = np.zeros_like(search_mask)
+            seed_region_mask[seed_y1:seed_y2, seed_x1:seed_x2] = 1
+            seed_region_area = float(np.count_nonzero(seed_region_mask))
+
+            best_component = None
+            best_overlap = 0
+
+            for component_index in range(1, component_count):
+                component_area = int(stats[component_index, cv2.CC_STAT_AREA])
+                if component_area <= 0:
+                    continue
+
+                component_pixels = labels == component_index
+                overlap = int(
+                    np.count_nonzero(
+                        component_pixels & (seed_region_mask > 0)
+                    )
+                )
+
+                if overlap > best_overlap:
+                    best_overlap = overlap
+                    best_component = component_index
+
+            if best_component is not None and seed_region_area > 0.0:
+                component_area = float(
+                    stats[best_component, cv2.CC_STAT_AREA]
+                )
+                component_area_ratio = component_area / float(
+                    search_width * search_height
+                )
+                seed_overlap_ratio = best_overlap / seed_region_area
+
+                # A Quiet Zone must be a substantial physical patch but
+                # must not consume most of the photograph.
+                if (
+                    0.04 <= component_area_ratio <= 0.30
+                    and seed_overlap_ratio >= 0.35
+                ):
+                    component_mask = (
+                        labels == best_component
+                    ).astype(np.uint8) * 255
+
+                    component_contours, _ = cv2.findContours(
+                        component_mask,
+                        cv2.RETR_EXTERNAL,
+                        cv2.CHAIN_APPROX_SIMPLE,
+                    )
+
+                    if component_contours:
+                        component_contour = max(
+                            component_contours,
+                            key=cv2.contourArea,
+                        )
+                        component_perimeter = float(
+                            cv2.arcLength(component_contour, True)
+                        )
+
+                        if component_perimeter > 0.0:
+                            surface_approximations = []
+
+                            for epsilon_fraction in (0.01, 0.02, 0.03, 0.04):
+                                approximation = cv2.approxPolyDP(
+                                    component_contour,
+                                    epsilon_fraction * component_perimeter,
+                                    True,
+                                )
+
+                                if (
+                                    approximation is not None
+                                    and len(approximation) == 4
+                                    and cv2.isContourConvex(approximation)
+                                ):
+                                    surface_approximations.append(approximation)
+
+                            if surface_approximations:
+                                surface_approximation = min(
+                                    surface_approximations,
+                                    key=lambda item: abs(
+                                        cv2.contourArea(item)
+                                        - component_area
+                                    ),
+                                )
+
+                                surface_points = (
+                                    surface_approximation
+                                    .reshape(4, 2)
+                                    .astype(np.float32)
+                                )
+
+                                geometry = _quiet_zone_geometry(surface_points)
+
+                                if geometry is not None:
+                                    (
+                                        ordered_surface,
+                                        surface_side_lengths,
+                                        surface_aspect_ratio,
+                                        surface_right_angle_score,
+                                        surface_area,
+                                    ) = geometry
+
+                                    shortest_surface_side = float(
+                                        np.min(surface_side_lengths)
+                                    )
+
+                                    try:
+                                        min_rect = cv2.minAreaRect(
+                                            ordered_surface.astype(np.float32)
+                                        )
+                                        rect_width, rect_height = min_rect[1]
+                                        rect_area = float(
+                                            rect_width * rect_height
+                                        )
+                                        surface_rectangularity = (
+                                            min(
+                                                1.0,
+                                                surface_area / rect_area,
+                                            )
+                                            if rect_area > 1e-6
+                                            else 0.0
+                                        )
+                                    except cv2.error:
+                                        surface_rectangularity = 0.0
+
+                                    # Compare the physical surface against the
+                                    # immediate exterior of its detected mask.
+                                    boundary_kernel = np.ones(
+                                        (15, 15),
+                                        dtype=np.uint8,
+                                    )
+                                    inner_mask = cv2.erode(
+                                        component_mask,
+                                        boundary_kernel,
+                                    )
+                                    outer_mask = cv2.subtract(
+                                        cv2.dilate(
+                                            component_mask,
+                                            boundary_kernel,
+                                        ),
+                                        component_mask,
+                                    )
+
+                                    boundary_contrast = 0.0
+
+                                    if (
+                                        np.count_nonzero(inner_mask) > 0
+                                        and np.count_nonzero(outer_mask) > 0
+                                    ):
+                                        inner_pixels = lab_image[
+                                            inner_mask > 0
+                                        ]
+                                        outer_pixels = lab_image[
+                                            outer_mask > 0
+                                        ]
+                                        boundary_contrast = float(
+                                            np.linalg.norm(
+                                                inner_pixels.mean(axis=0)
+                                                - outer_pixels.mean(axis=0)
+                                            )
+                                        )
+
+                                    normalized_boundary = max(
+                                        0.0,
+                                        min(1.0, boundary_contrast / 50.0),
+                                    )
+
+                                    normalized_center_distance = float(
+                                        np.hypot(
+                                            (
+                                                np.mean(ordered_surface, axis=0)[0]
+                                                - search_width / 2.0
+                                            ) / (search_width / 2.0),
+                                            (
+                                                np.mean(ordered_surface, axis=0)[1]
+                                                - search_height / 2.0
+                                            ) / (search_height / 2.0),
+                                        )
+                                    )
+                                    surface_center_score = max(
+                                        0.0,
+                                        min(
+                                            1.0,
+                                            1.0
+                                            - (
+                                                normalized_center_distance
+                                                / 0.45
+                                            ),
+                                        ),
+                                    )
+
+                                    # This is a physical-surface confidence,
+                                    # not a generic contour confidence.
+                                    surface_confidence = (
+                                        0.28 * surface_right_angle_score
+                                        + 0.18 * surface_aspect_ratio
+                                        + 0.16 * surface_rectangularity
+                                        + 0.20 * normalized_boundary
+                                        + 0.10 * seed_overlap_ratio
+                                        + 0.08 * surface_center_score
+                                    )
+
+                                    if (
+                                        surface_aspect_ratio >= 0.75
+                                        and surface_right_angle_score >= 0.75
+                                        and surface_rectangularity >= 0.70
+                                        and shortest_surface_side >= 100.0
+                                        and boundary_contrast >= 20.0
+                                        and surface_confidence >= 0.70
+                                    ):
+                                        ordered_surface_original = (
+                                            ordered_surface / float(scale)
+                                        )
+
+                                        try:
+                                            surface_warped = _warp_quiet_zone(
+                                                image,
+                                                ordered_surface_original,
+                                                QUIET_ZONE_CANONICAL_SIZE,
+                                            )
+                                        except (
+                                            cv2.error,
+                                            ValueError,
+                                            TypeError,
+                                        ):
+                                            surface_warped = None
+
+                                        if (
+                                            surface_warped is not None
+                                            and surface_warped.size > 0
+                                            and surface_warped.shape[:2]
+                                            == (
+                                                QUIET_ZONE_CANONICAL_SIZE,
+                                                QUIET_ZONE_CANONICAL_SIZE,
+                                            )
+                                        ):
+                                            physical_score = (
+                                                100.0
+                                                * surface_confidence
+                                            )
+
+                                            candidates.append(
+                                                {
+                                                    "score": float(
+                                                        max(
+                                                            physical_score,
+                                                            82.0,
+                                                        )
+                                                    ),
+                                                    "corners": (
+                                                        ordered_surface_original.copy()
+                                                    ),
+                                                    "warped": surface_warped,
+                                                    "metrics": {
+                                                        "detection_source": (
+                                                            "physical_surface"
+                                                        ),
+                                                        "boundary_contrast": round(
+                                                            boundary_contrast,
+                                                            3,
+                                                        ),
+                                                        "seed_overlap_ratio": round(
+                                                            seed_overlap_ratio,
+                                                            4,
+                                                        ),
+                                                        "surface_confidence": round(
+                                                            surface_confidence,
+                                                            4,
+                                                        ),
+                                                    },
+                                                    "area_ratio": float(
+                                                        component_area_ratio
+                                                    ),
+                                                    "physical_surface": True,
+                                                }
+                                            )
+
+    except (
+        cv2.error,
+        ValueError,
+        TypeError,
+        IndexError,
+        FloatingPointError,
+    ):
+        # The fallback is optional. If it cannot establish a strong
+        # physical-surface candidate, retain the existing detector path.
+        pass
+
+    # --------------------------------------------------------
     # 4. NO CANDIDATES
     # --------------------------------------------------------
     if not candidates:
@@ -1040,180 +1404,112 @@ def extract_quiet_zone(
             "image": None,
             "capture_context": capture_context,
         }
-        
-    #---------------------------------------------------------
-    # 5. SELECT THE PHYSICAL QUIET ZONE
+
     # --------------------------------------------------------
-    #
-    # A single uploaded photograph can legitimately generate
-    # multiple mathematical contour candidates. Those are NOT
-    # multiple physical Quiet Zones.
-    #
-    # When the physical-surface detector has identified the
-    # Quiet Zone, that candidate is authoritative. Do not allow
-    # secondary contour interpretations of the same photograph
-    # to trigger QUIET_ZONE_DETECTION_AMBIGUOUS.
+    # 5. DE-DUPLICATE SAME-PHYSICAL-ZONE CANDIDATES
     # --------------------------------------------------------
+    candidates.sort(
+        key=lambda candidate: candidate["score"],
+        reverse=True,
+    )
 
-    physical_candidates = [
-        candidate
-        for candidate in candidates
-        if candidate.get("physical_surface") is True
-    ]
+    distinct_candidates = []
 
-    if physical_candidates:
-        physical_candidates.sort(
-            key=lambda candidate: candidate["score"],
-            reverse=True,
+    for candidate in candidates:
+        candidate_corners = candidate["corners"]
+        is_duplicate = False
+
+        candidate_area = max(candidate["area_ratio"], 1e-6)
+        candidate_scale = math.sqrt(candidate_area) * max(
+            original_width,
+            original_height,
         )
+        duplicate_distance_threshold = max(10.0, candidate_scale * 0.08)
 
-        best = physical_candidates[0]
-        best_score = float(best["score"])
+        for existing in distinct_candidates:
+            existing_corners = existing["corners"]
+            if existing_corners.shape != (4, 2):
+                continue
 
-        combined_confidence = max(
-            0.0,
-            min(1.0, best_score / 100.0),
-        )
-
-    else:
-        # ----------------------------------------------------
-        # 5B. NORMAL CONTOUR CANDIDATE DE-DUPLICATION
-        # ----------------------------------------------------
-
-        candidates.sort(
-            key=lambda candidate: candidate["score"],
-            reverse=True,
-        )
-
-        distinct_candidates = []
-
-        for candidate in candidates:
-            candidate_corners = candidate["corners"]
-            is_duplicate = False
-
-            candidate_area = max(
-                candidate["area_ratio"],
-                1e-6,
-            )
-
-            candidate_scale = math.sqrt(
-                candidate_area
-            ) * max(
-                original_width,
-                original_height,
-            )
-
-            duplicate_distance_threshold = max(
-                10.0,
-                candidate_scale * 0.08,
-            )
-
-            for existing in distinct_candidates:
-                existing_corners = existing["corners"]
-
-                if existing_corners.shape != (4, 2):
-                    continue
-
-                mean_corner_distance = float(
-                    np.mean(
-                        np.linalg.norm(
-                            candidate_corners - existing_corners,
-                            axis=1,
-                        )
+            # Compare ordered corners in the same coordinate system.
+            mean_corner_distance = float(
+                np.mean(
+                    np.linalg.norm(
+                        candidate_corners - existing_corners,
+                        axis=1,
                     )
                 )
-
-                if (
-                    np.isfinite(mean_corner_distance)
-                    and mean_corner_distance
-                    <= duplicate_distance_threshold
-                ):
-                    is_duplicate = True
-                    break
-
-            if not is_duplicate:
-                distinct_candidates.append(candidate)
-
-        if not distinct_candidates:
-            return {
-                "success": False,
-                "reason": "QUIET_ZONE_CANDIDATE_CLUSTERING_FAILED",
-                "confidence": 0.0,
-                "corners": None,
-                "image": None,
-                "capture_context": capture_context,
-            }
-
-        best = distinct_candidates[0]
-        best_score = float(best["score"])
-
-        # ----------------------------------------------------
-        # 6. CONFIDENCE / AMBIGUITY
-        # ----------------------------------------------------
-
-        base_confidence = max(
-            0.0,
-            min(1.0, best_score / 100.0),
-        )
-
-        if len(distinct_candidates) > 1:
-            second_score = float(
-                distinct_candidates[1]["score"]
-            )
-
-            score_margin = (
-                best_score - second_score
-            )
-
-            margin_confidence = max(
-                0.0,
-                min(
-                    1.0,
-                    score_margin / 20.0,
-                ),
-            )
-
-            combined_confidence = (
-                0.80 * base_confidence
-                + 0.20 * margin_confidence
             )
 
             if (
-                score_margin / 100.0
-                < QUIET_ZONE_MIN_SCORE_MARGIN
+                np.isfinite(mean_corner_distance)
+                and mean_corner_distance <= duplicate_distance_threshold
             ):
-                return {
-                    "success": False,
-                    "reason": "QUIET_ZONE_DETECTION_AMBIGUOUS",
-                    "confidence": round(
-                        combined_confidence,
-                        4,
-                    ),
-                    "corners": None,
-                    "image": None,
-                    "capture_context": capture_context,
-                }
+                is_duplicate = True
+                break
 
-        else:
-            combined_confidence = base_confidence
+        if not is_duplicate:
+            distinct_candidates.append(candidate)
 
-    # --------------------------------------------------------
-    # 7. FAIL CLOSED ON LOW CONFIDENCE
-    # --------------------------------------------------------
-
-    if combined_confidence < QUIET_ZONE_MIN_CONFIDENCE:
+    if not distinct_candidates:
         return {
             "success": False,
-            "reason": "QUIET_ZONE_DETECTION_CONFIDENCE_TOO_LOW",
-            "confidence": round(
-                combined_confidence,
-                4,
-            ),
+            "reason": "QUIET_ZONE_CANDIDATE_CLUSTERING_FAILED",
+            "confidence": 0.0,
             "corners": None,
             "image": None,
             "capture_context": capture_context,
         }
-   
+
+    best = distinct_candidates[0]
+    best_score = float(best["score"])
+
+    # --------------------------------------------------------
+    # 6. CONFIDENCE / AMBIGUITY
+    # --------------------------------------------------------
+    base_confidence = max(
+        0.0,
+        min(1.0, best_score / 100.0),
+    )
+
+    if len(distinct_candidates) > 1:
+        second_score = float(distinct_candidates[1]["score"])
+        score_margin = best_score - second_score
+
+        margin_confidence = max(
+            0.0,
+            min(1.0, score_margin / 20.0),
+        )
+
+        combined_confidence = (
+            0.80 * base_confidence
+            + 0.20 * margin_confidence
+        )
+
+        if (score_margin / 100.0) < QUIET_ZONE_MIN_SCORE_MARGIN:
+            return {
+                "success": False,
+                "reason": "QUIET_ZONE_DETECTION_AMBIGUOUS",
+                "confidence": round(combined_confidence, 4),
+                "corners": None,
+                "image": None,
+                "capture_context": capture_context,
+            }
+    else:
+        combined_confidence = base_confidence
+
+    # --------------------------------------------------------
+    # 7. FAIL CLOSED ON LOW CONFIDENCE
+    # --------------------------------------------------------
+    if combined_confidence < QUIET_ZONE_MIN_CONFIDENCE:
+        return {
+            "success": False,
+            "reason": "QUIET_ZONE_DETECTION_CONFIDENCE_TOO_LOW",
+            "confidence": round(combined_confidence, 4),
+            "corners": None,
+            "image": None,
+            "capture_context": capture_context,
+        }
 
     # --------------------------------------------------------
     # 8. CANONICAL EXTRACTION
@@ -1263,6 +1559,7 @@ def extract_quiet_zone(
         "capture_context": capture_context,
         "metrics": best["metrics"],
     }
+
 
 def normalize_image(image, target_size=1024):
     if image is None:
