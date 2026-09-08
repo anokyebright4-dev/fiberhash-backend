@@ -13,9 +13,15 @@ Coverage follows the approved implementation/test plan:
   * public-contract / compatibility preservation
 """
 
+import asyncio
+import io
+import json
+import os
+
 import cv2
 import numpy as np
 import pytest
+from starlette.datastructures import Headers, UploadFile
 
 import main
 from tests import synthetic
@@ -206,6 +212,22 @@ def test_close_up_patch_is_detected_regardless_of_area(patch):
     assert result["success"] is True, (patch, result["reason"])
 
 
+def test_close_up_patch_filling_about_90_percent_is_detected():
+    # Genuinely exercise the ~90% frame-area condition (not the ~83% case).
+    frame = 900
+    patch = int(round((0.90 ** 0.5) * frame))  # 854 -> ~90% of the frame area
+    area_fraction = (patch * patch) / float(frame * frame)
+    assert 0.88 <= area_fraction <= 0.92, area_fraction
+    image, _ = synthetic.frame_with_patch(frame, frame, frame // 2, frame // 2, patch, patch, seed=7)
+    result = main.extract_quiet_zone(image)
+    assert result["success"] is True, (area_fraction, result["reason"])
+    assert result["image"].shape == (
+        main.QUIET_ZONE_CANONICAL_SIZE,
+        main.QUIET_ZONE_CANONICAL_SIZE,
+        3,
+    )
+
+
 def test_frame_spanning_border_is_rejected():
     # A contour that is essentially the whole frame outline is not a patch.
     image = np.full((900, 900, 3), 40, np.uint8)
@@ -355,3 +377,142 @@ def test_same_patch_across_rotations_yields_similar_canonical():
     b = (b - b.mean()) / (b.std() + 1e-6)
     correlation = float((a * b).mean())
     assert correlation > 0.5
+
+
+# ----------------------------------------------------------------------------
+# Register -> verify round-trip through the real Quiet Zone pipeline
+# ----------------------------------------------------------------------------
+
+def _scene_jpeg(seed=7):
+    image, _ = synthetic.frame_with_patch(
+        900, 900, 450, 450, 340, 340, mark_corner="tl", seed=seed
+    )
+    ok, buffer = cv2.imencode(".jpg", image)
+    assert ok
+    return buffer.tobytes()
+
+
+def _upload(name, data):
+    return UploadFile(
+        filename=name,
+        file=io.BytesIO(data),
+        headers=Headers({"content-type": "image/jpeg"}),
+    )
+
+
+def _isolate_pipeline_storage(tmp_path, monkeypatch):
+    # Keep all DB writes / stored baselines inside the test's tmp dir; never
+    # touch the real database or uploads directory.
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("uploads", exist_ok=True)
+    os.makedirs("debug_rois", exist_ok=True)
+    monkeypatch.setattr(main, "DB_PATH", str(tmp_path / "roundtrip.db"))
+    main.init_db()
+
+
+def test_register_then_verify_round_trip(tmp_path, monkeypatch):
+    _isolate_pipeline_storage(tmp_path, monkeypatch)
+    scene = _scene_jpeg()
+
+    async def scenario():
+        registration = await main.register_unit(
+            unit_id="U-ROUNDTRIP",
+            order_id="O1",
+            seller_id="S1",
+            buyer_id="B1",
+            marketplace_name="M1",
+            product_id="P1",
+            product_name="PN",
+            brand="BR",
+            batch_code="BC",
+            package_image=_upload("package.jpg", scene),
+            seal_image=_upload("seal.jpg", scene),
+            package_capture_context="factory_registration",
+            seal_capture_context="factory_registration",
+        )
+        # A successful extraction must register (dict result, not a 4xx JSON).
+        assert isinstance(registration, dict), getattr(
+            registration, "body", registration
+        )
+        assert registration["status"] == "registered"
+
+        verification = await main.verify_unit(
+            unit_id="U-ROUNDTRIP",
+            package_scan=_upload("package.jpg", scene),
+            seal_scan=_upload("seal.jpg", scene),
+            package_capture_context="consumer_scan",
+            seal_capture_context="consumer_scan",
+        )
+        # The stored canonical is verifiable against a scan of the same patch.
+        assert isinstance(verification, dict), getattr(
+            verification, "body", verification
+        )
+        assert verification["status"] == "verified"
+        assert verification["decision"] == "pass"
+
+    asyncio.run(scenario())
+
+
+def test_extraction_failure_cannot_enter_verification(tmp_path, monkeypatch):
+    _isolate_pipeline_storage(tmp_path, monkeypatch)
+    scene = _scene_jpeg()
+
+    ok, blank_buf = cv2.imencode(".jpg", np.full((900, 900, 3), 50, np.uint8))
+    assert ok
+    blank = blank_buf.tobytes()
+
+    async def scenario():
+        registration = await main.register_unit(
+            unit_id="U-FAILGUARD",
+            order_id="O1",
+            seller_id="S1",
+            buyer_id="B1",
+            marketplace_name="M1",
+            product_id="P1",
+            product_name="PN",
+            brand="BR",
+            batch_code="BC",
+            package_image=_upload("package.jpg", scene),
+            seal_image=_upload("seal.jpg", scene),
+            package_capture_context="factory_registration",
+            seal_capture_context="factory_registration",
+        )
+        assert isinstance(registration, dict)
+        assert registration["status"] == "registered"
+
+        # One scan fails Quiet Zone extraction: verification must fail closed
+        # (HTTP 422) and never emit a pass/verified decision into SIFT.
+        response = await main.verify_unit(
+            unit_id="U-FAILGUARD",
+            package_scan=_upload("package.jpg", scene),
+            seal_scan=_upload("blank.jpg", blank),
+            package_capture_context="consumer_scan",
+            seal_capture_context="consumer_scan",
+        )
+        assert not isinstance(response, dict)
+        assert response.status_code == 422
+        body = json.loads(response.body)
+        assert body.get("decision") != "pass"
+        assert body.get("status") == "error"
+        assert "Quiet Zone detection" in body.get("message", "")
+
+        # A registration whose baseline fails extraction must also fail closed.
+        failed_registration = await main.register_unit(
+            unit_id="U-FAILREG",
+            order_id="O1",
+            seller_id="S1",
+            buyer_id="B1",
+            marketplace_name="M1",
+            product_id="P1",
+            product_name="PN",
+            brand="BR",
+            batch_code="BC",
+            package_image=_upload("blank.jpg", blank),
+            seal_image=_upload("seal.jpg", scene),
+            package_capture_context="factory_registration",
+            seal_capture_context="factory_registration",
+        )
+        assert not isinstance(failed_registration, dict)
+        assert failed_registration.status_code == 422
+
+    asyncio.run(scenario())
