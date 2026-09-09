@@ -342,16 +342,31 @@ QUIET_ZONE_ORIENTATION_MIN_MARGIN = 0.02
 
 # Near-zero interior variance indicates a rendered UI panel / blank control
 # rather than a physical surface. This is a content-agnostic rejection: it
-# only requires that some real surface texture exists, never a particular
-# printed pattern.
-QUIET_ZONE_MIN_SURFACE_STD = 3.0
+# only requires that some minimal real surface variance exists, never a
+# particular printed pattern. Genuine physical surfaces sit far above this
+# (tens of grey levels) and flat/blank panels far below it.
+QUIET_ZONE_MIN_SURFACE_STD = 2.0
 
-# Interior-coherence rejection (content-agnostic): a physical Quiet Zone
-# surface is not dominated by long straight lines (ruled/boxed print, logos)
-# or by very high edge density (busy print). These reject such regions
-# without assuming any specific printed pattern.
-QUIET_ZONE_MAX_LONG_LINES = 4
-QUIET_ZONE_MAX_EDGE_DENSITY = 0.35
+# Interior-coherence rejection (content-agnostic): printed ruling / boxed
+# graphics / straight-edge print is strongly DIRECTIONAL, whereas a genuine
+# physical Quiet Zone surface (cardboard/paper fibre) is an ISOTROPIC
+# micro-texture. We reject candidates whose interior structure is strongly
+# directional, measured by structure-tensor coherence in [0, 1]. This never
+# assumes a specific printed pattern, never uses edge density as a rejection
+# (dense texture is a physical-surface signal), and never uses the 45x45 mm
+# capture guide or any physical dimension.
+QUIET_ZONE_MAX_DIRECTIONAL_COHERENCE = 0.85
+
+# The physical-surface (colour-seeded) fallback is a secondary detector that
+# can latch onto whatever sits under the frame centre, so it must be highly
+# selective. Genuine physical-surface detections score >= ~0.94; require a
+# high physical-surface confidence so an incidental centred region (a package
+# panel, capture-guide interior, etc.) cannot become a competing candidate.
+QUIET_ZONE_FALLBACK_MIN_CONFIDENCE = 0.85
+
+# Minimum long-line length as a fraction of the canonical width, used only
+# for the reported long_line_count metric (scale free; not a gate).
+QUIET_ZONE_LONG_LINE_MIN_FRAC = 0.45
 
 
 def _order_quad_cyclic(points):
@@ -554,9 +569,11 @@ def _quiet_zone_geometry(points):
 
         angle_errors.append(cosine)
 
+    # angle_errors holds |cos(theta)| per corner; 0 is a perfect right angle.
+    mean_angle_error = float(np.mean(angle_errors))
     right_angle_score = 1.0 - min(
         1.0,
-        float(np.mean(angle_errors)) / 0.35,
+        mean_angle_error / 0.35,
     )
 
     area = abs(
@@ -571,6 +588,7 @@ def _quiet_zone_geometry(points):
         aspect_ratio,
         right_angle_score,
         area,
+        mean_angle_error,
     )
     
 def _warp_quiet_zone(
@@ -714,18 +732,20 @@ def _quiet_zone_surface_metrics(warped):
         np.mean(edges > 0)
     )
 
+    # Only genuinely long straight lines (a large fraction of the canonical
+    # width) count. Short fibre/handwriting segments of a real physical
+    # surface must NOT be counted as ruling.
+    long_line_min_length = max(60, int(width * QUIET_ZONE_LONG_LINE_MIN_FRAC))
+
     lines = cv2.HoughLinesP(
         edges,
         1,
         np.pi / 180.0,
         threshold=max(
-            25,
-            int(width * 0.08),
+            30,
+            int(width * 0.10),
         ),
-        minLineLength=max(
-            35,
-            int(width * 0.15),
-        ),
+        minLineLength=long_line_min_length,
         maxLineGap=8,
     )
 
@@ -745,7 +765,7 @@ def _quiet_zone_surface_metrics(warped):
                     )
                 )
 
-                if line_length >= width * 0.15:
+                if line_length >= long_line_min_length:
                     long_line_count += 1
 
     saturation_std = float(
@@ -756,11 +776,30 @@ def _quiet_zone_surface_metrics(warped):
         np.std(inner_hsv[:, :, 2])
     )
 
+    # Structure-tensor coherence: a scale-free, content-agnostic measure of
+    # how directional the interior texture is. Printed ruling / straight-edge
+    # graphics are strongly directional (coherence -> 1); a genuine physical
+    # Quiet Zone surface (cardboard/paper fibre) is isotropic (coherence low).
+    gx = cv2.Sobel(inner_gray, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(inner_gray, cv2.CV_32F, 0, 1, ksize=3)
+    j_xx = float(np.mean(gx * gx))
+    j_yy = float(np.mean(gy * gy))
+    j_xy = float(np.mean(gx * gy))
+    denom = j_xx + j_yy
+    directional_coherence = (
+        float(
+            math.sqrt((j_xx - j_yy) ** 2 + 4.0 * (j_xy ** 2)) / denom
+        )
+        if denom > 1e-6
+        else 0.0
+    )
+
     return {
         "edge_density": edge_density,
         "long_line_count": long_line_count,
         "saturation_std": saturation_std,
         "value_std": value_std,
+        "directional_coherence": directional_coherence,
     }
 
 
@@ -1138,6 +1177,7 @@ def extract_quiet_zone(
                         aspect_ratio,
                         right_angle_score,
                         area,
+                        mean_angle_error,
                     ) = geometry
 
                     if not np.all(np.isfinite(ordered_search)):
@@ -1186,16 +1226,18 @@ def extract_quiet_zone(
                     metrics.update(orientation_info)
 
                     edge_density = float(metrics.get("edge_density", 1.0))
-                    long_line_count = int(metrics.get("long_line_count", 999))
+                    directional_coherence = float(
+                        metrics.get("directional_coherence", 0.0)
+                    )
                     if not np.isfinite(edge_density):
                         continue
 
-                    # Content-agnostic interior-coherence rejection: ruled /
-                    # boxed print (many long lines) or busy print (very high
-                    # edge density) is not a physical Quiet Zone surface.
-                    if long_line_count >= QUIET_ZONE_MAX_LONG_LINES:
-                        continue
-                    if edge_density > QUIET_ZONE_MAX_EDGE_DENSITY:
+                    # Content-agnostic interior-coherence rejection: strongly
+                    # directional interiors are printed ruling / straight-edge
+                    # graphics, not a physical Quiet Zone surface (which is an
+                    # isotropic micro-texture). Dense edges are never, by
+                    # themselves, a rejection.
+                    if directional_coherence >= QUIET_ZONE_MAX_DIRECTIONAL_COHERENCE:
                         continue
 
                     # Centre position is only a weak prior from the camera
@@ -1253,25 +1295,13 @@ def extract_quiet_zone(
                         image, ordered_original
                     )
 
-                    # High edge density indicates busy print, not a physical
-                    # quiet-zone surface.
-                    surface_edge_score = max(
+                    # Isotropy: a genuine physical surface is an isotropic
+                    # micro-texture, so it scores high; directional printed
+                    # edges score low. Content-agnostic and complementary to
+                    # the directional-coherence rejection above.
+                    isotropy_score = max(
                         0.0,
-                        min(
-                            1.0,
-                            (0.25 - edge_density) / 0.25,
-                        ),
-                    )
-
-                    # Long straight lines indicate ruled/boxed print (logos,
-                    # panels). Content-agnostic: only the presence of long
-                    # lines is penalised, never a specific printed pattern.
-                    straight_structure_score = max(
-                        0.0,
-                        min(
-                            1.0,
-                            1.0 - (long_line_count / 12.0),
-                        ),
+                        min(1.0, 1.0 - directional_coherence),
                     )
 
                     # Surface presence: reward any real physical surface
@@ -1294,19 +1324,28 @@ def extract_quiet_zone(
                         ),
                     )
 
+                    # Right-angle credit for SCORING uses a gentler curve than
+                    # the acceptance gate above: genuinely near-square quads
+                    # from rotated / mildly perspective-distorted real captures
+                    # deserve credit, but this never loosens the gate (so it
+                    # cannot admit new candidates).
+                    right_angle_score_for_scoring = 1.0 - min(
+                        1.0, mean_angle_error / 0.5
+                    )
+
                     # Rebalanced scoring (sums to 100): pure quadrilateral
-                    # geometry can no longer dominate; surface/boundary
-                    # evidence contributes meaningfully; the camera-guide
-                    # centre is only a small optional prior and never defines
-                    # the corners nor determines acceptance on its own.
+                    # geometry can no longer dominate; boundary + isotropic
+                    # surface texture evidence contributes meaningfully; the
+                    # camera-guide centre is only a small optional prior and
+                    # never defines the corners nor determines acceptance on
+                    # its own.
                     score = (
-                        20.0 * right_angle_score
+                        20.0 * right_angle_score_for_scoring
                         + 15.0 * aspect_ratio
                         + 10.0 * rectangularity
                         + 22.0 * boundary_score
-                        + 8.0 * surface_edge_score
+                        + 15.0 * isotropy_score
                         + 8.0 * texture_score
-                        + 7.0 * straight_structure_score
                         + 6.0 * center_score
                         + 4.0 * size_score
                     )
@@ -1520,6 +1559,7 @@ def extract_quiet_zone(
                                         surface_aspect_ratio,
                                         surface_right_angle_score,
                                         surface_area,
+                                        surface_mean_angle_error,
                                     ) = geometry
 
                                     shortest_surface_side = float(
@@ -1628,7 +1668,8 @@ def extract_quiet_zone(
                                         and surface_rectangularity >= 0.70
                                         and shortest_surface_side >= 100.0
                                         and boundary_contrast >= 20.0
-                                        and surface_confidence >= 0.70
+                                        and surface_confidence
+                                        >= QUIET_ZONE_FALLBACK_MIN_CONFIDENCE
                                     ):
                                         ordered_surface_original = (
                                             ordered_surface / float(scale)
@@ -1669,14 +1710,9 @@ def extract_quiet_zone(
                                                 "value_std", 0.0
                                             )
                                         )
-                                        surface_long_lines = int(
+                                        surface_coherence = float(
                                             surface_texture_metrics.get(
-                                                "long_line_count", 999
-                                            )
-                                        )
-                                        surface_edge_density = float(
-                                            surface_texture_metrics.get(
-                                                "edge_density", 1.0
+                                                "directional_coherence", 0.0
                                             )
                                         )
 
@@ -1691,15 +1727,17 @@ def extract_quiet_zone(
                                             # Content-agnostic rejection of
                                             # near-zero-variance regions
                                             # (rendered panels / blank
-                                            # controls are not physical
-                                            # surfaces) and of ruled / busy
-                                            # printed regions.
+                                            # controls) and of strongly
+                                            # directional interiors (printed
+                                            # ruling / straight-edge graphics).
+                                            # Dense micro-texture is a
+                                            # physical-surface signal, so a
+                                            # high edge density is not a
+                                            # rejection.
                                             and surface_value_std
                                             >= QUIET_ZONE_MIN_SURFACE_STD
-                                            and surface_long_lines
-                                            < QUIET_ZONE_MAX_LONG_LINES
-                                            and surface_edge_density
-                                            <= QUIET_ZONE_MAX_EDGE_DENSITY
+                                            and surface_coherence
+                                            < QUIET_ZONE_MAX_DIRECTIONAL_COHERENCE
                                         ):
                                             physical_score = (
                                                 100.0
@@ -1720,6 +1758,12 @@ def extract_quiet_zone(
                                             surface_metrics = {
                                                 "detection_source": (
                                                     "physical_surface"
+                                                ),
+                                                "value_std": round(
+                                                    surface_value_std, 2
+                                                ),
+                                                "directional_coherence": round(
+                                                    surface_coherence, 3
                                                 ),
                                                 "boundary_contrast": round(
                                                     boundary_contrast,
