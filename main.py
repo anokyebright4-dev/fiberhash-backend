@@ -322,34 +322,184 @@ QUIET_ZONE_BORDER_INSET = 0.06
 QUIET_ZONE_MIN_CONFIDENCE = 0.78
 
 # If two candidates score too similarly, we do not guess.
-QUIET_ZONE_MIN_SCORE_MARGIN = 0.08 
-def _order_quiet_zone_points(points):
+QUIET_ZONE_MIN_SCORE_MARGIN = 0.08
+
+# Aspect (min/max averaged opposite sides) at or above this value is
+# treated as a square, which has a 4-fold rotational symmetry. Below it
+# the quad is treated as a rectangle with a 2-fold symmetry. This is a
+# purely relative, image-derived test; it never uses a physical size or
+# the 45 x 45 mm capture guide.
+QUIET_ZONE_SQUARE_ASPECT_TOLERANCE = 0.90
+
+# Orientation is resolved from intrinsic image evidence only. The energy
+# centroid of the high-pass patch must sit at least this far off centre
+# (as a fraction of the patch half-size) before we trust its direction.
+QUIET_ZONE_ORIENTATION_MIN_MAGNITUDE = 0.04
+
+# The winning quarter-turn must beat the runner-up by at least this much
+# (normalised by the patch half-size) or the orientation is ambiguous.
+QUIET_ZONE_ORIENTATION_MIN_MARGIN = 0.02
+
+# Near-zero interior variance indicates a rendered UI panel / blank control
+# rather than a physical surface. This is a content-agnostic rejection: it
+# only requires that some minimal real surface variance exists, never a
+# particular printed pattern. Genuine physical surfaces sit far above this
+# (tens of grey levels) and flat/blank panels far below it.
+QUIET_ZONE_MIN_SURFACE_STD = 2.0
+
+# Interior-coherence rejection (content-agnostic): printed ruling / boxed
+# graphics / straight-edge print is strongly DIRECTIONAL, whereas a genuine
+# physical Quiet Zone surface (cardboard/paper fibre) is an ISOTROPIC
+# micro-texture. We reject candidates whose interior structure is strongly
+# directional, measured by structure-tensor coherence in [0, 1]. This never
+# assumes a specific printed pattern, never uses edge density as a rejection
+# (dense texture is a physical-surface signal), and never uses the 45x45 mm
+# capture guide or any physical dimension.
+QUIET_ZONE_MAX_DIRECTIONAL_COHERENCE = 0.85
+
+# The physical-surface (colour-seeded) fallback is a secondary detector that
+# can latch onto whatever sits under the frame centre, so it must be highly
+# selective. Genuine physical-surface detections score >= ~0.94; require a
+# high physical-surface confidence so an incidental centred region (a package
+# panel, capture-guide interior, etc.) cannot become a competing candidate.
+QUIET_ZONE_FALLBACK_MIN_CONFIDENCE = 0.85
+
+# Minimum long-line length as a fraction of the canonical width, used only
+# for the reported long_line_count metric (scale free; not a gate).
+QUIET_ZONE_LONG_LINE_MIN_FRAC = 0.45
+
+
+def _order_quad_cyclic(points):
     """
-    Return four points in this order:
+    Stage 1 of corner ordering: geometry only.
 
-        top-left
-        top-right
-        bottom-right
-        bottom-left
+    Return the four vertices in a deterministic cyclic order with a
+    consistent winding (clockwise in image coordinates, where y points
+    down). The starting vertex is deterministic but is NOT claimed to be
+    the physical top-left; that decision belongs to Stage 2
+    (_resolve_canonical_orientation), which uses intrinsic image evidence.
 
-    This is required before perspective correction.
+    This method sorts by angle around the centroid, so it is robust for
+    rotated (including ~45 deg), perspective-distorted and moderately
+    sheared quadrilaterals, and it never depends on min(x + y).
     """
-    points = np.asarray(points, dtype=np.float32).reshape(4, 2)
+    pts = np.asarray(points, dtype=np.float32).reshape(4, 2)
 
-    coordinate_sum = points.sum(axis=1)
-    coordinate_difference = np.diff(
-        points,
-        axis=1,
-    ).reshape(-1)
+    centroid = pts.mean(axis=0)
+    angles = np.arctan2(
+        pts[:, 1] - centroid[1],
+        pts[:, 0] - centroid[0],
+    )
+    ordered = pts[np.argsort(angles)]
 
-    return np.array(
-        [
-            points[np.argmin(coordinate_sum)],
-            points[np.argmin(coordinate_difference)],
-            points[np.argmax(coordinate_sum)],
-            points[np.argmax(coordinate_difference)],
-        ],
-        dtype=np.float32,
+    # Shoelace signed area. In image coordinates (y down) a clockwise
+    # polygon has a positive signed area; enforce that convention so the
+    # winding is fixed and the mapping is never mirrored.
+    signed_area = 0.0
+    for index in range(4):
+        x1, y1 = ordered[index]
+        x2, y2 = ordered[(index + 1) % 4]
+        signed_area += (x1 * y2) - (x2 * y1)
+
+    if signed_area < 0.0:
+        ordered = ordered[::-1]
+
+    return np.ascontiguousarray(ordered, dtype=np.float32)
+
+
+def _resolve_canonical_orientation(base_warped, allowed_quarter_turns):
+    """
+    Stage 2 of corner ordering: resolve canonical orientation from
+    intrinsic image evidence.
+
+    Given the base canonical produced from the Stage-1 cyclic order and
+    the set of quarter-turns permitted by the quad's symmetry, choose the
+    turn that places the patch's dominant asymmetry into the canonical
+    top-left. Consistency across captures is a testable target, not an
+    unconditional guarantee: when the patch has insufficient asymmetric
+    evidence this returns orientation_ambiguous=True with a low
+    confidence and a deterministic fallback turn of 0, rather than
+    inventing a physically meaningful top-left.
+
+    No physical size, calibration or capture-guide information is used.
+
+    Returns (quarter_turns, orientation_confidence, orientation_ambiguous,
+    orientation_method).
+    """
+    try:
+        gray = cv2.cvtColor(base_warped, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    except (cv2.error, ValueError, TypeError):
+        return 0, 0.0, True, "orientation_error"
+
+    height, width = gray.shape[:2]
+    half = 0.5 * float(min(height, width))
+    if half <= 1.0:
+        return 0, 0.0, True, "orientation_degenerate"
+
+    # High-pass to suppress lighting gradients so the descriptor reflects
+    # intrinsic structure rather than the capture illumination.
+    sigma = max(2.0, min(height, width) / 16.0)
+    background = cv2.GaussianBlur(gray, (0, 0), sigmaX=sigma, sigmaY=sigma)
+    energy = np.abs(gray - background)
+
+    ys, xs = np.mgrid[0:height, 0:width]
+    center_x = (width - 1) / 2.0
+    center_y = (height - 1) / 2.0
+
+    projections = {}
+    for quarter_turns in allowed_quarter_turns:
+        rotated = np.rot90(energy, quarter_turns)
+        total = float(rotated.sum())
+        if total <= 1e-6:
+            projections[quarter_turns] = (0.0, 0.0)
+            continue
+
+        cx = float((xs * rotated).sum() / total)
+        cy = float((ys * rotated).sum() / total)
+        dx = cx - center_x
+        dy = cy - center_y
+
+        # Projection onto the top-left diagonal (points up and left);
+        # larger means the energy sits more firmly in the top-left.
+        projection = (-dx - dy) / math.sqrt(2.0)
+        magnitude = math.hypot(dx, dy)
+        projections[quarter_turns] = (projection, magnitude)
+
+    ordered_turns = sorted(
+        allowed_quarter_turns,
+        key=lambda turn: projections[turn][0],
+        reverse=True,
+    )
+
+    best_turn = ordered_turns[0]
+    best_projection, best_magnitude = projections[best_turn]
+
+    normalized_magnitude = min(1.0, best_magnitude / half)
+
+    if len(ordered_turns) > 1:
+        second_projection = projections[ordered_turns[1]][0]
+        normalized_margin = (best_projection - second_projection) / half
+    else:
+        normalized_margin = 1.0
+
+    ambiguous = (
+        normalized_magnitude < QUIET_ZONE_ORIENTATION_MIN_MAGNITUDE
+        or normalized_margin < QUIET_ZONE_ORIENTATION_MIN_MARGIN
+    )
+
+    if ambiguous:
+        return (
+            0,
+            round(float(normalized_magnitude), 4),
+            True,
+            "insufficient_evidence",
+        )
+
+    return (
+        int(best_turn),
+        round(float(normalized_magnitude), 4),
+        False,
+        "resolved",
     )
 
 
@@ -366,7 +516,7 @@ def _quiet_zone_geometry(points):
 
     Returns None when geometry is invalid.
     """
-    ordered = _order_quiet_zone_points(points)
+    ordered = _order_quad_cyclic(points)
 
     side_lengths = np.linalg.norm(
         np.roll(ordered, -1, axis=0) - ordered,
@@ -419,9 +569,11 @@ def _quiet_zone_geometry(points):
 
         angle_errors.append(cosine)
 
+    # angle_errors holds |cos(theta)| per corner; 0 is a perfect right angle.
+    mean_angle_error = float(np.mean(angle_errors))
     right_angle_score = 1.0 - min(
         1.0,
-        float(np.mean(angle_errors)) / 0.35,
+        mean_angle_error / 0.35,
     )
 
     area = abs(
@@ -436,6 +588,7 @@ def _quiet_zone_geometry(points):
         aspect_ratio,
         right_angle_score,
         area,
+        mean_angle_error,
     )
     
 def _warp_quiet_zone(
@@ -444,10 +597,45 @@ def _warp_quiet_zone(
     size=QUIET_ZONE_CANONICAL_SIZE,
 ):
     """
-    Perspective-correct the detected physical Quiet Zone
-    into a square canonical image.
+    Perspective-correct the detected physical Quiet Zone into a square
+    canonical image.
+
+    Corner ordering follows the approved two-stage design:
+
+      1. Geometry establishes the cyclic order and winding
+         (_order_quad_cyclic).
+      2. Intrinsic image evidence resolves the canonical orientation
+         (_resolve_canonical_orientation).
+
+    Returns a tuple:
+        (canonical_image, ordered_corners, orientation_info)
+    where ordered_corners are the input points reordered to the resolved
+    TL, TR, BR, BL (in the same coordinate system as ``points``) and stay
+    consistent with the returned image. orientation_info exposes
+    orientation_confidence, orientation_ambiguous and orientation_method.
     """
-    ordered = _order_quiet_zone_points(points)
+    cyclic = _order_quad_cyclic(points)
+
+    # Long-side normalisation (geometry only): make the longer averaged
+    # side pair horizontal so a rectangle's remaining ambiguity is a pure
+    # 180 deg flip. This uses only relative pixel lengths - never a
+    # physical size or the capture guide.
+    side_lengths = np.linalg.norm(
+        np.roll(cyclic, -1, axis=0) - cyclic,
+        axis=1,
+    )
+    width_pair = (side_lengths[0] + side_lengths[2]) / 2.0
+    height_pair = (side_lengths[1] + side_lengths[3]) / 2.0
+
+    if max(width_pair, height_pair) <= 1e-6:
+        aspect = 1.0
+    else:
+        aspect = min(width_pair, height_pair) / max(width_pair, height_pair)
+
+    is_square = aspect >= QUIET_ZONE_SQUARE_ASPECT_TOLERANCE
+
+    if not is_square and height_pair > width_pair:
+        cyclic = np.ascontiguousarray(np.roll(cyclic, -1, axis=0))
 
     destination = np.array(
         [
@@ -460,16 +648,46 @@ def _warp_quiet_zone(
     )
 
     matrix = cv2.getPerspectiveTransform(
-        ordered,
+        cyclic,
         destination,
     )
 
-    return cv2.warpPerspective(
+    base_warped = cv2.warpPerspective(
         image,
         matrix,
         (size, size),
         flags=cv2.INTER_CUBIC,
     )
+
+    if is_square:
+        allowed_quarter_turns = (0, 1, 2, 3)
+    else:
+        allowed_quarter_turns = (0, 2)
+
+    (
+        quarter_turns,
+        orientation_confidence,
+        orientation_ambiguous,
+        orientation_method,
+    ) = _resolve_canonical_orientation(base_warped, allowed_quarter_turns)
+
+    canonical = np.ascontiguousarray(np.rot90(base_warped, quarter_turns))
+
+    # np.rot90(img, k) rotates counter-clockwise; the source point that
+    # maps to each destination corner shifts by the same k, so rolling the
+    # cyclic corners by -k keeps ordered_corners consistent with the image.
+    ordered_corners = np.ascontiguousarray(
+        np.roll(cyclic, -quarter_turns, axis=0),
+        dtype=np.float32,
+    )
+
+    orientation_info = {
+        "orientation_confidence": orientation_confidence,
+        "orientation_ambiguous": orientation_ambiguous,
+        "orientation_method": orientation_method,
+    }
+
+    return canonical, ordered_corners, orientation_info
     
 def _quiet_zone_surface_metrics(warped):
     """
@@ -514,18 +732,20 @@ def _quiet_zone_surface_metrics(warped):
         np.mean(edges > 0)
     )
 
+    # Only genuinely long straight lines (a large fraction of the canonical
+    # width) count. Short fibre/handwriting segments of a real physical
+    # surface must NOT be counted as ruling.
+    long_line_min_length = max(60, int(width * QUIET_ZONE_LONG_LINE_MIN_FRAC))
+
     lines = cv2.HoughLinesP(
         edges,
         1,
         np.pi / 180.0,
         threshold=max(
-            25,
-            int(width * 0.08),
+            30,
+            int(width * 0.10),
         ),
-        minLineLength=max(
-            35,
-            int(width * 0.15),
-        ),
+        minLineLength=long_line_min_length,
         maxLineGap=8,
     )
 
@@ -545,8 +765,8 @@ def _quiet_zone_surface_metrics(warped):
                     )
                 )
 
-            if line_length >= width * 0.15:
-                long_line_count += 1
+                if line_length >= long_line_min_length:
+                    long_line_count += 1
 
     saturation_std = float(
         np.std(inner_hsv[:, :, 1])
@@ -556,12 +776,78 @@ def _quiet_zone_surface_metrics(warped):
         np.std(inner_hsv[:, :, 2])
     )
 
+    # Structure-tensor coherence: a scale-free, content-agnostic measure of
+    # how directional the interior texture is. Printed ruling / straight-edge
+    # graphics are strongly directional (coherence -> 1); a genuine physical
+    # Quiet Zone surface (cardboard/paper fibre) is isotropic (coherence low).
+    gx = cv2.Sobel(inner_gray, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(inner_gray, cv2.CV_32F, 0, 1, ksize=3)
+    j_xx = float(np.mean(gx * gx))
+    j_yy = float(np.mean(gy * gy))
+    j_xy = float(np.mean(gx * gy))
+    denom = j_xx + j_yy
+    directional_coherence = (
+        float(
+            math.sqrt((j_xx - j_yy) ** 2 + 4.0 * (j_xy ** 2)) / denom
+        )
+        if denom > 1e-6
+        else 0.0
+    )
+
     return {
         "edge_density": edge_density,
         "long_line_count": long_line_count,
         "saturation_std": saturation_std,
         "value_std": value_std,
+        "directional_coherence": directional_coherence,
     }
+
+
+def _quad_boundary_contrast(image, quad_points):
+    """
+    Measure the brightness step across the detected quad's boundary in the
+    original image: the mean of an interior ring just inside the boundary
+    versus an exterior ring just outside it.
+
+    A genuine physical Quiet Zone patch is visually distinct from the
+    surrounding package, so it shows a real boundary step; an ordinary
+    printed rectangle whose interior matches its surroundings does not.
+    This is content-agnostic - it never assumes anything about what is
+    printed inside the patch. Returns a value in [0, 1].
+    """
+    try:
+        pts = np.asarray(quad_points, dtype=np.float32).reshape(4, 2)
+        height, width = image.shape[:2]
+
+        mask = np.zeros((height, width), dtype=np.uint8)
+        cv2.fillConvexPoly(mask, pts.astype(np.int32), 255)
+        if np.count_nonzero(mask) == 0:
+            return 0.0
+
+        side_lengths = np.linalg.norm(
+            np.roll(pts, -1, axis=0) - pts,
+            axis=1,
+        )
+        shortest_side = float(np.min(side_lengths))
+        kernel_size = max(3, int(round(shortest_side * 0.06)))
+        kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
+
+        inner_ring = cv2.subtract(mask, cv2.erode(mask, kernel))
+        outer_ring = cv2.subtract(cv2.dilate(mask, kernel), mask)
+
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        inner_pixels = gray[inner_ring > 0]
+        outer_pixels = gray[outer_ring > 0]
+        if inner_pixels.size == 0 or outer_pixels.size == 0:
+            return 0.0
+
+        contrast = abs(
+            float(inner_pixels.mean()) - float(outer_pixels.mean())
+        )
+        return max(0.0, min(1.0, contrast / 50.0))
+    except (cv2.error, ValueError, TypeError):
+        return 0.0
+
     
 # Surgical camera/JPG Quiet Zone fix.
 # Replace ONLY the existing extract_quiet_zone() function with this block.
@@ -832,11 +1118,20 @@ def extract_quiet_zone(
                 # The old 1% full-frame gate was the main failure mode
                 # for phone photographs. The ROI threshold is deliberately
                 # lower, but absolute geometry and confidence remain strict.
-                if area_ratio < 0.05:
+                if area_ratio < 0.03:
                     continue
-                # A valid Quiet Zone is a physical patch, not a contour
-                # spanning a large fraction of the package/photo.
-                if area_ratio > 0.20:
+
+                # A legitimate close-up Quiet Zone may fill most of the
+                # frame, so there is no rigid upper area cap. Instead we
+                # reject only contours that hug all four ROI borders, which
+                # are the ROI/frame outline rather than a physical patch.
+                bx, by, bw, bh = cv2.boundingRect(contour)
+                border_margin = max(4.0, 0.01 * min(roi_width, roi_height))
+                hugs_left = bx <= border_margin
+                hugs_top = by <= border_margin
+                hugs_right = (roi_width - (bx + bw)) <= border_margin
+                hugs_bottom = (roi_height - (by + bh)) <= border_margin
+                if hugs_left and hugs_top and hugs_right and hugs_bottom:
                     continue
 
                 perimeter = float(cv2.arcLength(contour, True))
@@ -882,6 +1177,7 @@ def extract_quiet_zone(
                         aspect_ratio,
                         right_angle_score,
                         area,
+                        mean_angle_error,
                     ) = geometry
 
                     if not np.all(np.isfinite(ordered_search)):
@@ -904,7 +1200,7 @@ def extract_quiet_zone(
                     ordered_original = ordered_search / float(scale)
 
                     try:
-                        warped = _warp_quiet_zone(
+                        warped, oriented_corners, orientation_info = _warp_quiet_zone(
                             image,
                             ordered_original,
                             QUIET_ZONE_CANONICAL_SIZE,
@@ -927,9 +1223,21 @@ def extract_quiet_zone(
                     except (cv2.error, ValueError, TypeError):
                         continue
 
+                    metrics.update(orientation_info)
+
                     edge_density = float(metrics.get("edge_density", 1.0))
-                    long_line_count = int(metrics.get("long_line_count", 999))
+                    directional_coherence = float(
+                        metrics.get("directional_coherence", 0.0)
+                    )
                     if not np.isfinite(edge_density):
+                        continue
+
+                    # Content-agnostic interior-coherence rejection: strongly
+                    # directional interiors are printed ruling / straight-edge
+                    # graphics, not a physical Quiet Zone surface (which is an
+                    # isotropic micro-texture). Dense edges are never, by
+                    # themselves, a rejection.
+                    if directional_coherence >= QUIET_ZONE_MAX_DIRECTIONAL_COHERENCE:
                         continue
 
                     # Centre position is only a weak prior from the camera
@@ -978,57 +1286,86 @@ def extract_quiet_zone(
                     except cv2.error:
                         rectangularity = 0.0
 
-                    boundary_score = _quiet_zone_boundary_score(warped)
-
-                    surface_edge_score = max(
-                        0.0,
-                        min(
-                            1.0,
-                            (0.25 - edge_density) / 0.25,
-                        ),
-                    )
-                    straight_structure_score = max(
-                        0.0,
-                        min(
-                            1.0,
-                            1.0 - (long_line_count / 20.0),
-                        ),
+                    # Boundary contrast: a physical patch shows a visible
+                    # border transition against its surroundings. Measured in
+                    # the original image (interior ring vs exterior ring) and
+                    # weighted meaningfully so ordinary printed rectangles
+                    # whose interior matches their surroundings lose.
+                    boundary_score = _quad_boundary_contrast(
+                        image, ordered_original
                     )
 
-                    # Quiet Zone fingerprinting requires a textured physical
-                    # surface. Extremely flat regions (camera UI / blank
-                    # controls) are therefore weaker candidates, while highly
-                    # variable printed regions are also weaker candidates.
-                    value_std = float(metrics.get("value_std", 999.0))
+                    # Isotropy: a genuine physical surface is an isotropic
+                    # micro-texture, so it scores high; directional printed
+                    # edges score low. Content-agnostic and complementary to
+                    # the directional-coherence rejection above.
+                    isotropy_score = max(
+                        0.0,
+                        min(1.0, 1.0 - directional_coherence),
+                    )
+
+                    # Surface presence: reward any real physical surface
+                    # texture and only penalise near-blank regions (camera
+                    # UI / flat controls). This makes no assumption about the
+                    # printed contents of the Quiet Zone.
+                    value_std = float(metrics.get("value_std", 0.0))
+
+                    # Content-agnostic rejection of near-zero-variance
+                    # regions (rendered panels / blank controls are not
+                    # physical surfaces).
+                    if value_std < QUIET_ZONE_MIN_SURFACE_STD:
+                        continue
+
                     texture_score = max(
                         0.0,
                         min(
                             1.0,
-                            1.0 - (abs(value_std - 25.0) / 25.0),
+                            value_std / 12.0,
                         ),
                     )
 
-                    # Geometry remains dominant. The camera-guide centre is
-                    # a ranking prior only; it never defines the corners.
+                    # Right-angle credit for SCORING uses a gentler curve than
+                    # the acceptance gate above: genuinely near-square quads
+                    # from rotated / mildly perspective-distorted real captures
+                    # deserve credit, but this never loosens the gate (so it
+                    # cannot admit new candidates).
+                    right_angle_score_for_scoring = 1.0 - min(
+                        1.0, mean_angle_error / 0.5
+                    )
+
+                    # Rebalanced scoring (sums to 100): pure quadrilateral
+                    # geometry can no longer dominate; boundary + isotropic
+                    # surface texture evidence contributes meaningfully; the
+                    # camera-guide centre is only a small optional prior and
+                    # never defines the corners nor determines acceptance on
+                    # its own.
                     score = (
-                        39.0 * right_angle_score
-                        + 22.0 * aspect_ratio
-                        + 7.0 * rectangularity
-                        + 3.0 * size_score
-                        + 14.0 * center_score
-                        + 4.0 * surface_edge_score
-                        + 2.0 * straight_structure_score
-                        + 2.0 * boundary_score
-                        + 7.0 * texture_score
+                        20.0 * right_angle_score_for_scoring
+                        + 15.0 * aspect_ratio
+                        + 10.0 * rectangularity
+                        + 22.0 * boundary_score
+                        + 15.0 * isotropy_score
+                        + 8.0 * texture_score
+                        + 6.0 * center_score
+                        + 4.0 * size_score
                     )
 
                     if not np.isfinite(score):
                         continue
 
+                    dedup_corners = ordered_original[
+                        np.lexsort(
+                            (ordered_original[:, 1], ordered_original[:, 0])
+                        )
+                    ]
+
                     candidates.append(
                         {
                             "score": float(score),
-                            "corners": ordered_original.copy(),
+                            "corners": oriented_corners.copy(),
+                            "dedup_corners": np.ascontiguousarray(
+                                dedup_corners, dtype=np.float32
+                            ),
                             "warped": warped,
                             "metrics": metrics,
                             "area_ratio": float(area_ratio),
@@ -1081,14 +1418,13 @@ def extract_quiet_zone(
                 colour_distance <= colour_threshold
             ).astype(np.uint8) * 255
 
-            # Restrict the fallback to the broad capture-guide area so a
-            # matching colour elsewhere in the package cannot win.
-            search_mask = np.zeros_like(surface_mask)
-            sx1 = int(search_width * 0.20)
-            sx2 = int(search_width * 0.80)
-            sy1 = int(search_height * 0.20)
-            sy2 = int(search_height * 0.80)
-            search_mask[sy1:sy2, sx1:sx2] = surface_mask[sy1:sy2, sx1:sx2]
+            # The colour seed is sampled at the frame centre only as a weak
+            # optional prior for this secondary fallback; it is NOT a
+            # central acceptance restriction. The whole frame is searched so
+            # an off-centre physical patch that matches the seed colour can
+            # still be found. Off-centre detection overall is owned by the
+            # primary contour path above.
+            search_mask = surface_mask
 
             search_mask = cv2.morphologyEx(
                 search_mask,
@@ -1138,11 +1474,30 @@ def extract_quiet_zone(
                 )
                 seed_overlap_ratio = best_overlap / seed_region_area
 
-                # A Quiet Zone must be a substantial physical patch but
-                # must not consume most of the photograph.
+                # A Quiet Zone must be a substantial physical patch. A
+                # legitimate close-up may fill most of the frame, so the
+                # upper bound is generous; a frame-spanning background is
+                # excluded separately by the border-hugging check below.
+                component_x = int(stats[best_component, cv2.CC_STAT_LEFT])
+                component_y = int(stats[best_component, cv2.CC_STAT_TOP])
+                component_w = int(stats[best_component, cv2.CC_STAT_WIDTH])
+                component_h = int(stats[best_component, cv2.CC_STAT_HEIGHT])
+                fallback_border_margin = max(
+                    4.0, 0.01 * min(search_width, search_height)
+                )
+                component_hugs_frame = (
+                    component_x <= fallback_border_margin
+                    and component_y <= fallback_border_margin
+                    and (search_width - (component_x + component_w))
+                    <= fallback_border_margin
+                    and (search_height - (component_y + component_h))
+                    <= fallback_border_margin
+                )
+
                 if (
-                    0.04 <= component_area_ratio <= 0.30
+                    0.04 <= component_area_ratio <= 0.92
                     and seed_overlap_ratio >= 0.35
+                    and not component_hugs_frame
                 ):
                     component_mask = (
                         labels == best_component
@@ -1204,6 +1559,7 @@ def extract_quiet_zone(
                                         surface_aspect_ratio,
                                         surface_right_angle_score,
                                         surface_area,
+                                        surface_mean_angle_error,
                                     ) = geometry
 
                                     shortest_surface_side = float(
@@ -1312,14 +1668,19 @@ def extract_quiet_zone(
                                         and surface_rectangularity >= 0.70
                                         and shortest_surface_side >= 100.0
                                         and boundary_contrast >= 20.0
-                                        and surface_confidence >= 0.70
+                                        and surface_confidence
+                                        >= QUIET_ZONE_FALLBACK_MIN_CONFIDENCE
                                     ):
                                         ordered_surface_original = (
                                             ordered_surface / float(scale)
                                         )
 
                                         try:
-                                            surface_warped = _warp_quiet_zone(
+                                            (
+                                                surface_warped,
+                                                surface_oriented_corners,
+                                                surface_orientation_info,
+                                            ) = _warp_quiet_zone(
                                                 image,
                                                 ordered_surface_original,
                                                 QUIET_ZONE_CANONICAL_SIZE,
@@ -1330,6 +1691,30 @@ def extract_quiet_zone(
                                             TypeError,
                                         ):
                                             surface_warped = None
+                                            surface_oriented_corners = None
+                                            surface_orientation_info = {}
+
+                                        try:
+                                            surface_texture_metrics = (
+                                                _quiet_zone_surface_metrics(
+                                                    surface_warped
+                                                )
+                                                if surface_warped is not None
+                                                else {}
+                                            )
+                                        except (cv2.error, ValueError, TypeError):
+                                            surface_texture_metrics = {}
+
+                                        surface_value_std = float(
+                                            surface_texture_metrics.get(
+                                                "value_std", 0.0
+                                            )
+                                        )
+                                        surface_coherence = float(
+                                            surface_texture_metrics.get(
+                                                "directional_coherence", 0.0
+                                            )
+                                        )
 
                                         if (
                                             surface_warped is not None
@@ -1339,10 +1724,62 @@ def extract_quiet_zone(
                                                 QUIET_ZONE_CANONICAL_SIZE,
                                                 QUIET_ZONE_CANONICAL_SIZE,
                                             )
+                                            # Content-agnostic rejection of
+                                            # near-zero-variance regions
+                                            # (rendered panels / blank
+                                            # controls) and of strongly
+                                            # directional interiors (printed
+                                            # ruling / straight-edge graphics).
+                                            # Dense micro-texture is a
+                                            # physical-surface signal, so a
+                                            # high edge density is not a
+                                            # rejection.
+                                            and surface_value_std
+                                            >= QUIET_ZONE_MIN_SURFACE_STD
+                                            and surface_coherence
+                                            < QUIET_ZONE_MAX_DIRECTIONAL_COHERENCE
                                         ):
                                             physical_score = (
                                                 100.0
                                                 * surface_confidence
+                                            )
+
+                                            surface_dedup_corners = (
+                                                ordered_surface_original[
+                                                    np.lexsort(
+                                                        (
+                                                            ordered_surface_original[:, 1],
+                                                            ordered_surface_original[:, 0],
+                                                        )
+                                                    )
+                                                ]
+                                            )
+
+                                            surface_metrics = {
+                                                "detection_source": (
+                                                    "physical_surface"
+                                                ),
+                                                "value_std": round(
+                                                    surface_value_std, 2
+                                                ),
+                                                "directional_coherence": round(
+                                                    surface_coherence, 3
+                                                ),
+                                                "boundary_contrast": round(
+                                                    boundary_contrast,
+                                                    3,
+                                                ),
+                                                "seed_overlap_ratio": round(
+                                                    seed_overlap_ratio,
+                                                    4,
+                                                ),
+                                                "surface_confidence": round(
+                                                    surface_confidence,
+                                                    4,
+                                                ),
+                                            }
+                                            surface_metrics.update(
+                                                surface_orientation_info
                                             )
 
                                             candidates.append(
@@ -1354,26 +1791,14 @@ def extract_quiet_zone(
                                                         )
                                                     ),
                                                     "corners": (
-                                                        ordered_surface_original.copy()
+                                                        surface_oriented_corners.copy()
+                                                    ),
+                                                    "dedup_corners": np.ascontiguousarray(
+                                                        surface_dedup_corners,
+                                                        dtype=np.float32,
                                                     ),
                                                     "warped": surface_warped,
-                                                    "metrics": {
-                                                        "detection_source": (
-                                                            "physical_surface"
-                                                        ),
-                                                        "boundary_contrast": round(
-                                                            boundary_contrast,
-                                                            3,
-                                                        ),
-                                                        "seed_overlap_ratio": round(
-                                                            seed_overlap_ratio,
-                                                            4,
-                                                        ),
-                                                        "surface_confidence": round(
-                                                            surface_confidence,
-                                                            4,
-                                                        ),
-                                                    },
+                                                    "metrics": surface_metrics,
                                                     "area_ratio": float(
                                                         component_area_ratio
                                                     ),
@@ -1415,35 +1840,45 @@ def extract_quiet_zone(
 
     distinct_candidates = []
 
+    def _candidate_bbox_size(corners):
+        xs = corners[:, 0]
+        ys = corners[:, 1]
+        return max(
+            1.0,
+            float(xs.max() - xs.min()),
+            float(ys.max() - ys.min()),
+        )
+
     for candidate in candidates:
-        candidate_corners = candidate["corners"]
+        # De-duplication compares centroid position and physical size, both
+        # measured from the corners in the ORIGINAL image (so they are
+        # path-independent, order-independent and orientation-independent).
+        # This clusters the several detections of one physical patch - from
+        # the contour path and the physical-surface fallback alike - while
+        # keeping two genuinely separate patches distinct.
+        candidate_corners = candidate["dedup_corners"]
+        candidate_centroid = candidate_corners.mean(axis=0)
+        candidate_size = _candidate_bbox_size(candidate_corners)
         is_duplicate = False
 
-        candidate_area = max(candidate["area_ratio"], 1e-6)
-        candidate_scale = math.sqrt(candidate_area) * max(
-            original_width,
-            original_height,
-        )
-        duplicate_distance_threshold = max(10.0, candidate_scale * 0.08)
+        duplicate_distance_threshold = max(20.0, candidate_size * 0.35)
 
         for existing in distinct_candidates:
-            existing_corners = existing["corners"]
+            existing_corners = existing["dedup_corners"]
             if existing_corners.shape != (4, 2):
                 continue
 
-            # Compare ordered corners in the same coordinate system.
-            mean_corner_distance = float(
-                np.mean(
-                    np.linalg.norm(
-                        candidate_corners - existing_corners,
-                        axis=1,
-                    )
-                )
+            existing_centroid = existing_corners.mean(axis=0)
+            existing_size = _candidate_bbox_size(existing_corners)
+            centroid_distance = float(
+                np.linalg.norm(candidate_centroid - existing_centroid)
             )
+            size_similarity = candidate_size / existing_size
 
             if (
-                np.isfinite(mean_corner_distance)
-                and mean_corner_distance <= duplicate_distance_threshold
+                np.isfinite(centroid_distance)
+                and centroid_distance <= duplicate_distance_threshold
+                and 0.6 <= size_similarity <= 1.67
             ):
                 is_duplicate = True
                 break
