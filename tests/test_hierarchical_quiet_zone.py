@@ -1,0 +1,99 @@
+"""Deterministic localisation tests for the hierarchical Quiet Zone scanner.
+
+These fixtures deliberately use no physical-size or capture-guide information.
+They assert localisation, not merely a successful response.
+"""
+
+import cv2
+import numpy as np
+
+import main
+
+
+def _texture(width, height, seed):
+    rng = np.random.default_rng(seed)
+    noise = rng.normal(0, 1, (height, width)).astype(np.float32)
+    noise = cv2.GaussianBlur(noise, (0, 0), sigmaX=6)
+    noise = cv2.normalize(noise, None, 135, 220, cv2.NORM_MINMAX).astype(np.uint8)
+    return cv2.cvtColor(noise, cv2.COLOR_GRAY2BGR)
+
+
+def _nested_scene():
+    image = np.full((1000, 1200, 3), 35, dtype=np.uint8)
+    # A deliberately salient outer/package surface.
+    outer = np.array([[120, 140], [1070, 110], [1100, 875], [150, 900]], np.int32)
+    cv2.fillConvexPoly(image, outer, (120, 120, 120))
+    cv2.polylines(image, [outer], True, (240, 240, 240), 8)
+    # The intended inner physical Quiet Zone is fully nested and textured.
+    quiet = np.array([[390, 300], [760, 270], [785, 650], [410, 680]], np.float32)
+    source = np.array([[0, 0], [359, 0], [359, 359], [0, 359]], np.float32)
+    transform = cv2.getPerspectiveTransform(source, quiet)
+    patch = _texture(360, 360, seed=44)
+    projected = cv2.warpPerspective(patch, transform, (1200, 1000))
+    mask = cv2.warpPerspective(np.full((360, 360), 255, np.uint8), transform, (1200, 1000))
+    image[mask > 0] = projected[mask > 0]
+    cv2.polylines(image, [quiet.astype(np.int32)], True, (245, 245, 245), 5)
+    return image, quiet
+
+
+def _mean_corner_error(actual, expected):
+    actual = np.asarray(actual, dtype=np.float32)
+    expected = main._qz_order_quad(expected)
+    return float(np.mean(np.linalg.norm(main._qz_order_quad(actual) - expected, axis=1)))
+
+
+def test_nested_inner_boundary_beats_larger_outer_package_boundary():
+    image, expected = _nested_scene()
+    result = main.extract_quiet_zone(image)
+    assert result["success"], result
+    assert _mean_corner_error(result["corners"], expected) < 18.0
+    assert result["image"].shape == (512, 512, 3)
+    assert result["metrics"]["detection_source"] == "hierarchical_boundary_scanner"
+
+
+def test_false_outer_rectangle_is_not_returned_as_a_successful_crop():
+    image, expected = _nested_scene()
+    result = main.extract_quiet_zone(image)
+    assert result["success"], result
+    detected_area = abs(cv2.contourArea(np.asarray(result["corners"], dtype=np.float32)))
+    outer_area = abs(cv2.contourArea(np.array([[120, 140], [1070, 110], [1100, 875], [150, 900]], np.float32)))
+    expected_area = abs(cv2.contourArea(expected))
+    assert abs(detected_area - expected_area) < abs(detected_area - outer_area)
+
+
+def test_off_centre_quiet_zone_does_not_require_a_centre_prior():
+    image = np.full((1000, 1200, 3), 30, dtype=np.uint8)
+    expected = np.array([[60, 610], [365, 590], [390, 910], [75, 925]], np.float32)
+    source = np.array([[0, 0], [319, 0], [319, 319], [0, 319]], np.float32)
+    transform = cv2.getPerspectiveTransform(source, expected)
+    patch = _texture(320, 320, seed=7)
+    projection = cv2.warpPerspective(patch, transform, (1200, 1000))
+    mask = cv2.warpPerspective(np.full((320, 320), 255, np.uint8), transform, (1200, 1000))
+    image[mask > 0] = projection[mask > 0]
+    cv2.polylines(image, [expected.astype(np.int32)], True, (245, 245, 245), 5)
+    result = main.extract_quiet_zone(image)
+    assert result["success"], result
+    assert _mean_corner_error(result["corners"], expected) < 20.0
+
+
+def test_flat_panel_fails_closed():
+    image = np.full((900, 900, 3), 40, dtype=np.uint8)
+    cv2.rectangle(image, (250, 250), (650, 650), (180, 180, 180), -1)
+    cv2.rectangle(image, (250, 250), (650, 650), (245, 245, 245), 5)
+    result = main.extract_quiet_zone(image)
+    assert not result["success"]
+    assert result["image"] is None
+
+
+def test_two_equally_supported_zones_are_ambiguous():
+    image = np.full((1000, 1000, 3), 35, dtype=np.uint8)
+    for x, y, seed in ((100, 100, 1), (560, 560, 1)):
+        image[y:y + 300, x:x + 300] = _texture(300, 300, seed)
+        cv2.rectangle(image, (x, y), (x + 299, y + 299), (245, 245, 245), 5)
+    result = main.extract_quiet_zone(image)
+    assert not result["success"]
+    assert result["reason"] in (
+        "QUIET_ZONE_DETECTION_AMBIGUOUS",
+        "QUIET_ZONE_DETECTION_CONFIDENCE_TOO_LOW",
+        "QUIET_ZONE_NOT_DETECTED",
+    )

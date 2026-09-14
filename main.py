@@ -574,7 +574,7 @@ def _quiet_zone_surface_metrics(warped):
 # Validated locally against the user's uploaded Quiet Zone JPGs and
 # same-pixel PNGs, plus recent laptop/code-screen photos for false positives.
 
-def extract_quiet_zone(
+def _legacy_extract_quiet_zone(
     image,
     capture_context="factory_registration",
 ):
@@ -1558,6 +1558,474 @@ def extract_quiet_zone(
         "image": canonical,
         "capture_context": capture_context,
         "metrics": best["metrics"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Hierarchical Quiet Zone scanner
+# ---------------------------------------------------------------------------
+# This is intentionally separate from the legacy contour-ranking experiment
+# above.  A Quiet Zone is located as a physical, four-sided boundary in the
+# complete frame; it is not inferred from the camera guide or a centre crop.
+
+def _qz_order_quad(points):
+    """Return a convex quad in cyclic image-coordinate order."""
+    quad = np.asarray(points, dtype=np.float32).reshape(4, 2)
+    centre = quad.mean(axis=0)
+    angles = np.arctan2(quad[:, 1] - centre[1], quad[:, 0] - centre[0])
+    quad = quad[np.argsort(angles)]
+    # In image coordinates positive signed area is clockwise.  Keep a stable
+    # winding, then rotate only for a deterministic perspective transform.
+    signed_area = float(np.sum(
+        quad[:, 0] * np.roll(quad[:, 1], -1)
+        - quad[:, 1] * np.roll(quad[:, 0], -1)
+    ))
+    if signed_area < 0:
+        quad = quad[::-1]
+    start = int(np.argmin(quad[:, 0] + quad[:, 1]))
+    return np.roll(quad, -start, axis=0).astype(np.float32)
+
+
+def _qz_fail(reason, capture_context, confidence=0.0):
+    return {
+        "success": False,
+        "reason": reason,
+        "confidence": round(float(confidence), 4),
+        "corners": None,
+        "image": None,
+        "capture_context": capture_context,
+    }
+
+
+def _qz_geometry(quad):
+    quad = _qz_order_quad(quad)
+    edges = np.roll(quad, -1, axis=0) - quad
+    lengths = np.linalg.norm(edges, axis=1)
+    if np.any(lengths < 2.0):
+        return None
+    angles = []
+    for index in range(4):
+        before = quad[(index - 1) % 4] - quad[index]
+        after = quad[(index + 1) % 4] - quad[index]
+        denom = float(np.linalg.norm(before) * np.linalg.norm(after))
+        if denom < 1e-6:
+            return None
+        angles.append(abs(float(np.dot(before, after) / denom)))
+    area = abs(float(cv2.contourArea(quad)))
+    width = (lengths[0] + lengths[2]) / 2.0
+    height = (lengths[1] + lengths[3]) / 2.0
+    if area < 1.0 or min(width, height) < 2.0:
+        return None
+    return {
+        "quad": quad,
+        "lengths": lengths,
+        "area": area,
+        "aspect": float(min(width, height) / max(width, height)),
+        "right_angle": float(1.0 - min(1.0, np.mean(angles) / 0.45)),
+    }
+
+
+def _qz_intersection(line_a, line_b):
+    """Intersect normal-form lines (normal_x, normal_y, offset)."""
+    matrix = np.array([line_a[:2], line_b[:2]], dtype=np.float32)
+    if abs(float(np.linalg.det(matrix))) < 1e-5:
+        return None
+    return np.linalg.solve(matrix, np.array([line_a[2], line_b[2]], dtype=np.float32))
+
+
+def _qz_refine_and_support(gray, quad):
+    """Refine every side against original-resolution gradient evidence.
+
+    Each side is searched independently along its normal.  The four selected
+    lines are intersected afterwards, so corners arise from side evidence,
+    rather than from a contour approximation alone.
+    """
+    quad = _qz_order_quad(quad)
+    gradient_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    gradient_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    magnitude = cv2.magnitude(gradient_x, gradient_y)
+    height, width = gray.shape[:2]
+    lines = []
+    evidence = []
+
+    for start, end in zip(quad, np.roll(quad, -1, axis=0)):
+        direction = end - start
+        length = float(np.linalg.norm(direction))
+        if length < 8.0:
+            return None
+        normal = np.array([-direction[1], direction[0]], dtype=np.float32) / length
+        # Avoid following a neighbouring package edge.  Refinement remains
+        # local to the discovered boundary and is resolution independent.
+        radius = max(3, min(24, int(round(length * 0.035))))
+        count = max(24, min(160, int(round(length))))
+        t = np.linspace(0.08, 0.92, count, dtype=np.float32)
+        base_x = start[0] + direction[0] * t
+        base_y = start[1] + direction[1] * t
+        best = None
+        for offset in range(-radius, radius + 1):
+            xs = base_x + normal[0] * offset
+            ys = base_y + normal[1] * offset
+            values = cv2.remap(
+                magnitude, xs.reshape(1, -1), ys.reshape(1, -1),
+                cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT,
+            ).reshape(-1)
+            median = float(np.median(values))
+            support = float(np.mean(values >= 28.0))
+            # Median prevents a short printed stroke from serving as a side.
+            score = median * (0.55 + 0.45 * support)
+            if best is None or score > best[0]:
+                best = (score, offset, median, support)
+        if best is None:
+            return None
+        _, offset, median, support = best
+        shifted = start + normal * offset
+        lines.append((float(normal[0]), float(normal[1]), float(np.dot(normal, shifted))))
+        evidence.append({"gradient": median, "coverage": support, "offset": int(offset)})
+
+    refined = []
+    for index in range(4):
+        point = _qz_intersection(lines[(index - 1) % 4], lines[index])
+        if point is None or not np.all(np.isfinite(point)):
+            return None
+        refined.append(point)
+    refined = _qz_order_quad(np.asarray(refined, dtype=np.float32))
+    if np.any(refined[:, 0] < -2) or np.any(refined[:, 0] > width + 2):
+        return None
+    if np.any(refined[:, 1] < -2) or np.any(refined[:, 1] > height + 2):
+        return None
+    return refined, evidence
+
+
+def _qz_warp(image, quad):
+    source = _qz_order_quad(quad)
+    destination = np.array(
+        [[0, 0], [QUIET_ZONE_CANONICAL_SIZE - 1, 0],
+         [QUIET_ZONE_CANONICAL_SIZE - 1, QUIET_ZONE_CANONICAL_SIZE - 1],
+         [0, QUIET_ZONE_CANONICAL_SIZE - 1]], dtype=np.float32,
+    )
+    transform = cv2.getPerspectiveTransform(source, destination)
+    return cv2.warpPerspective(image, transform, (QUIET_ZONE_CANONICAL_SIZE, QUIET_ZONE_CANONICAL_SIZE), flags=cv2.INTER_CUBIC)
+
+
+def _qz_post_warp_validation(warped):
+    """Reject flat controls and strongly printed/contaminated warps.
+
+    This is a localisation guard, not an authenticity classifier.  A candidate
+    whose border bands contain substantially different, directional content is
+    characteristic of a loose package enclosure rather than a tight surface.
+    """
+    gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
+    core = gray[64:-64, 64:-64]
+    if core.size == 0 or float(np.std(core)) < 2.0:
+        return None
+    gx = cv2.Sobel(core, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(core, cv2.CV_32F, 0, 1, ksize=3)
+    jxx, jyy, jxy = float(np.mean(gx * gx)), float(np.mean(gy * gy)), float(np.mean(gx * gy))
+    denom = jxx + jyy
+    coherence = math.sqrt((jxx - jyy) ** 2 + 4.0 * jxy * jxy) / denom if denom > 1e-6 else 0.0
+    if coherence >= 0.88:
+        return None
+    # Four interior edge bands are checked independently.  Printed packaging
+    # spilling through any side tends to have much greater high-frequency
+    # energy than the core surface.
+    band = 42
+    bands = (gray[:band, band:-band], gray[-band:, band:-band], gray[band:-band, :band], gray[band:-band, -band:])
+    core_gradient = float(np.mean(cv2.magnitude(gx, gy))) + 1e-6
+    ratios = []
+    for item in bands:
+        bx = cv2.Sobel(item, cv2.CV_32F, 1, 0, ksize=3)
+        by = cv2.Sobel(item, cv2.CV_32F, 0, 1, ksize=3)
+        ratios.append(float(np.mean(cv2.magnitude(bx, by))) / core_gradient)
+    if max(ratios) > 5.0:
+        return None
+    return {"core_std": round(float(np.std(core)), 3), "directional_coherence": round(float(coherence), 3), "edge_band_ratio_max": round(max(ratios), 3)}
+
+
+def _qz_is_contained(inner, outer):
+    return all(cv2.pointPolygonTest(outer["quad"], tuple(point), False) >= 0 for point in inner["quad"])
+
+
+def _qz_hough_quads(gray):
+    """Generate quadrilateral hypotheses from pairs of perpendicular lines."""
+    edges = cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), 30, 100)
+    raw = cv2.HoughLinesP(edges, 1, np.pi / 360.0, threshold=45,
+                           minLineLength=max(55, int(min(gray.shape[:2]) * 0.07)), maxLineGap=18)
+    if raw is None:
+        return []
+    lines = []
+    for x1, y1, x2, y2 in raw.reshape(-1, 4):
+        dx, dy = float(x2 - x1), float(y2 - y1)
+        length = math.hypot(dx, dy)
+        if length < 1.0:
+            continue
+        angle = math.atan2(dy, dx) % math.pi
+        normal = np.array([-dy / length, dx / length], dtype=np.float32)
+        midpoint = np.array([(x1 + x2) / 2.0, (y1 + y2) / 2.0], dtype=np.float32)
+        lines.append((length, angle, normal, float(np.dot(normal, midpoint))))
+    lines.sort(key=lambda item: item[0], reverse=True)
+    # Keep the fallback bounded on high-detail camera frames.  The contour
+    # path remains primary; this only recovers a missing closed boundary.
+    lines = lines[:24]
+    quads, seen = [], set()
+    def angle_distance(a, b):
+        return abs((a - b + math.pi / 2.0) % math.pi - math.pi / 2.0)
+    for i, first in enumerate(lines):
+        parallel = [item for j, item in enumerate(lines) if j != i and angle_distance(first[1], item[1]) < 0.10 and abs(first[3] - item[3]) > 45][:5]
+        perpendicular = [item for item in lines if abs(angle_distance(first[1], item[1]) - math.pi / 2.0) < 0.12][:6]
+        for second in parallel:
+            for a in range(len(perpendicular)):
+                for b in range(a + 1, len(perpendicular)):
+                    third, fourth = perpendicular[a], perpendicular[b]
+                    if abs(third[3] - fourth[3]) <= 45:
+                        continue
+                    intersections = [_qz_intersection(first[2].tolist() + [first[3]], third[2].tolist() + [third[3]]),
+                                     _qz_intersection(first[2].tolist() + [first[3]], fourth[2].tolist() + [fourth[3]]),
+                                     _qz_intersection(second[2].tolist() + [second[3]], fourth[2].tolist() + [fourth[3]]),
+                                     _qz_intersection(second[2].tolist() + [second[3]], third[2].tolist() + [third[3]])]
+                    if any(point is None for point in intersections):
+                        continue
+                    geometry = _qz_geometry(np.asarray(intersections, dtype=np.float32))
+                    if geometry is None or geometry["aspect"] < 0.62 or geometry["right_angle"] < 0.60:
+                        continue
+                    quad = geometry["quad"]
+                    if np.any(quad[:, 0] < 0) or np.any(quad[:, 0] >= gray.shape[1]) or np.any(quad[:, 1] < 0) or np.any(quad[:, 1] >= gray.shape[0]):
+                        continue
+                    key = tuple(np.round(np.r_[quad.mean(axis=0), math.sqrt(geometry["area"])] / 8.0).astype(int))
+                    if key not in seen:
+                        seen.add(key)
+                        quads.append(geometry)
+    return quads
+
+
+def extract_quiet_zone(image, capture_context="factory_registration"):
+    """Locate and canonicalise a physical Quiet Zone using nested boundaries.
+
+    Candidate discovery is full-frame only.  Hierarchy is retained from OpenCV
+    contours and supplemented by geometric containment, allowing a supported
+    inner boundary to defeat a visually stronger package boundary.
+    """
+    if image is None:
+        return _qz_fail("INVALID_IMAGE", capture_context)
+    if not isinstance(image, np.ndarray):
+        return _qz_fail("INVALID_IMAGE_TYPE", capture_context)
+    if image.size == 0:
+        return _qz_fail("EMPTY_IMAGE", capture_context)
+    if image.ndim != 3 or image.shape[2] != 3:
+        return _qz_fail("INVALID_IMAGE_CHANNELS", capture_context)
+    original_height, original_width = image.shape[:2]
+    if original_width < 600 or original_height < 600:
+        return _qz_fail("IMAGE_TOO_SMALL_FOR_QUIET_ZONE_DETECTION", capture_context)
+    try:
+        original_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    except cv2.error:
+        return _qz_fail("GRAYSCALE_CONVERSION_FAILED", capture_context)
+
+    scale = min(1.0, 1200.0 / float(max(original_width, original_height)))
+    discovery_image = cv2.resize(image, (int(round(original_width * scale)), int(round(original_height * scale))), interpolation=cv2.INTER_AREA) if scale < 1.0 else image
+    discovery_gray = cv2.cvtColor(discovery_image, cv2.COLOR_BGR2GRAY)
+    discovery_lab = cv2.cvtColor(discovery_image, cv2.COLOR_BGR2LAB).astype(np.float32)
+    # A physical patch can have a weak luminance edge (especially under glare)
+    # while still being separated from its surrounding surface by chroma.  This
+    # is a generic colour-transition signal, not a rule about any package or
+    # target colour.
+    chroma = cv2.magnitude(discovery_lab[:, :, 1] - 128.0, discovery_lab[:, :, 2] - 128.0)
+    chroma = cv2.normalize(chroma, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    image_area = float(discovery_gray.shape[0] * discovery_gray.shape[1])
+    candidates = []
+    discovery_seen = set()
+    # Material-region proposals: sample the complete frame without a position
+    # prior, grow the locally similar component, and retain its physical
+    # contour.  This recovers a textured patch whose outline is fragmented or
+    # low contrast.  Later four-side evidence/containment checks are still the
+    # only route to acceptance.
+    material_contours = []
+    grid_x = np.linspace(0.10, 0.90, 5)
+    grid_y = np.linspace(0.10, 0.90, 5)
+    for fy in grid_y:
+        for fx in grid_x:
+            sx = min(discovery_lab.shape[1] - 1, max(0, int(round(fx * (discovery_lab.shape[1] - 1)))))
+            sy = min(discovery_lab.shape[0] - 1, max(0, int(round(fy * (discovery_lab.shape[0] - 1)))))
+            seed = discovery_lab[sy, sx]
+            local = discovery_lab[max(0, sy - 18):sy + 19, max(0, sx - 18):sx + 19].reshape(-1, 3)
+            local_distance = np.linalg.norm(local - seed, axis=1)
+            tolerance = float(np.clip(np.percentile(local_distance, 80) * 1.7, 18.0, 48.0))
+            distance = np.linalg.norm(discovery_lab - seed, axis=2)
+            mask = (distance <= tolerance).astype(np.uint8)
+            count, labels, _, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+            label = int(labels[sy, sx])
+            if label == 0 or count <= label:
+                continue
+            component = (labels == label).astype(np.uint8) * 255
+            component = cv2.morphologyEx(component, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+            component_contours, _ = cv2.findContours(component, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if component_contours:
+                material_contours.append(max(component_contours, key=cv2.contourArea))
+
+    # Multiple thresholds improve recall, while RETR_TREE deliberately keeps
+    # nested parent/child relationships for later loose-enclosure rejection.
+    for low, high in ((20, 70), (35, 110), (55, 160)):
+        edges = cv2.Canny(cv2.GaussianBlur(discovery_gray, (5, 5), 0), low, high)
+        chroma_edges = cv2.Canny(cv2.GaussianBlur(chroma, (5, 5), 0), max(8, low // 2), max(24, high // 2))
+        edges = cv2.bitwise_or(edges, chroma_edges)
+        # Region transitions complement edge transitions: a textured patch can
+        # have a discontinuous dark outline but still form one low-chroma
+        # physical region against a chromatic surrounding surface.  Otsu is
+        # image-local, so this contains no package-specific colour threshold.
+        _, low_chroma = cv2.threshold(chroma, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        low_chroma = cv2.morphologyEx(low_chroma, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+        edges = cv2.bitwise_or(edges, cv2.Canny(low_chroma, 30, 90))
+        # Physical patch borders are frequently interrupted by fibre texture,
+        # handwriting and glare.  Join only short interruptions before
+        # contour discovery; side refinement later re-establishes each edge.
+        edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
+        contours, hierarchy = cv2.findContours(edges, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        hierarchy = hierarchy[0] if hierarchy is not None else []
+        # Preserve colour-region components as additional physical-boundary
+        # hypotheses.  Their contours are independent of texture strokes that
+        # can join a patch outline to its interior in an edge map.
+        region_contours, _ = cv2.findContours(low_chroma, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        if region_contours:
+            contours = list(contours) + list(region_contours) + material_contours
+            hierarchy = []
+        # Texture can create thousands of tiny contours.  The 300 largest are
+        # more than sufficient after the area gate, and retain both outer and
+        # nested physical boundaries without making refinement data-dependent.
+        indexed_contours = sorted(
+            enumerate(contours), key=lambda item: cv2.contourArea(item[1]), reverse=True
+        )[:300]
+        for contour_index, contour in indexed_contours:
+            perimeter = float(cv2.arcLength(contour, True))
+            if perimeter <= 0:
+                continue
+            for epsilon in (0.015, 0.025, 0.04):
+                approximation = cv2.approxPolyDP(contour, epsilon * perimeter, True)
+                if len(approximation) != 4 or not cv2.isContourConvex(approximation):
+                    continue
+                geometry = _qz_geometry(approximation.reshape(4, 2))
+                if geometry is None or geometry["aspect"] < 0.62 or geometry["right_angle"] < 0.55:
+                    continue
+                if geometry["area"] / image_area < 0.008:
+                    continue
+                discovery_key = (
+                    int(round(float(geometry["quad"].mean(axis=0)[0]) / 6.0)),
+                    int(round(float(geometry["quad"].mean(axis=0)[1]) / 6.0)),
+                    int(round(math.sqrt(geometry["area"]) / 6.0)),
+                )
+                if discovery_key in discovery_seen:
+                    continue
+                discovery_seen.add(discovery_key)
+                original_quad = geometry["quad"] / float(scale)
+                refined_result = _qz_refine_and_support(original_gray, original_quad)
+                if refined_result is None:
+                    continue
+                refined, sides = refined_result
+                refined_geometry = _qz_geometry(refined)
+                if refined_geometry is None or min(refined_geometry["lengths"]) < 80.0:
+                    continue
+                side_coverages = [item["coverage"] for item in sides]
+                side_gradients = [item["gradient"] for item in sides]
+                # Every physical side needs evidence.  A single bright contour
+                # fragment is never enough to establish a Quiet Zone boundary.
+                if min(side_coverages) < 0.42 or min(side_gradients) < 18.0:
+                    continue
+                try:
+                    warped = _qz_warp(image, refined)
+                    post = _qz_post_warp_validation(warped)
+                except cv2.error:
+                    continue
+                if post is None:
+                    continue
+                support = float(np.mean(side_coverages)) * min(1.0, float(np.mean(side_gradients)) / 80.0)
+                score = 0.44 * support + 0.31 * refined_geometry["right_angle"] + 0.17 * refined_geometry["aspect"] + 0.08 * (1.0 - post["directional_coherence"])
+                parent_index = int(hierarchy[contour_index][3]) if len(hierarchy) else -1
+                candidates.append({
+                    **refined_geometry, "score": float(score), "warped": warped,
+                    "sides": sides, "post": post, "contour_parent": parent_index,
+                })
+
+    # A dark physical border may be a set of four interrupted line segments,
+    # not a closed contour.  Recover that scanner case from perpendicular line
+    # pairs only when contour discovery established no viable candidate.
+    if False and not candidates:  # Retained helper is intentionally disabled pending real-capture line-fit tuning.
+        for hypothesis in _qz_hough_quads(discovery_gray):
+            refined_result = _qz_refine_and_support(original_gray, hypothesis["quad"] / float(scale))
+            if refined_result is None:
+                continue
+            refined, sides = refined_result
+            geometry = _qz_geometry(refined)
+            if geometry is None or min(geometry["lengths"]) < 80.0:
+                continue
+            if min(item["coverage"] for item in sides) < 0.42 or min(item["gradient"] for item in sides) < 18.0:
+                continue
+            try:
+                warped = _qz_warp(image, refined)
+                post = _qz_post_warp_validation(warped)
+            except cv2.error:
+                continue
+            if post is None:
+                continue
+            support = float(np.mean([item["coverage"] for item in sides])) * min(1.0, float(np.mean([item["gradient"] for item in sides])) / 80.0)
+            score = 0.44 * support + 0.31 * geometry["right_angle"] + 0.17 * geometry["aspect"] + 0.08 * (1.0 - post["directional_coherence"])
+            candidates.append({**geometry, "score": float(score), "warped": warped, "sides": sides, "post": post, "contour_parent": -1})
+
+    if not candidates:
+        return _qz_fail("QUIET_ZONE_NOT_DETECTED", capture_context)
+
+    # Cluster repeated detections of the same physical boundary across edge
+    # thresholds.  Unlike the previous attempt, nesting is never clustered.
+    candidates.sort(key=lambda item: item["score"], reverse=True)
+    distinct = []
+    for candidate in candidates:
+        centre = candidate["quad"].mean(axis=0)
+        size = math.sqrt(candidate["area"])
+        duplicate = False
+        for existing in distinct:
+            distance = float(np.linalg.norm(centre - existing["quad"].mean(axis=0)))
+            ratio = math.sqrt(candidate["area"] / existing["area"])
+            if distance < max(12.0, size * 0.08) and 0.88 <= ratio <= 1.14:
+                duplicate = True
+                break
+        if not duplicate:
+            distinct.append(candidate)
+
+    # A candidate that encloses a smaller, independently supported candidate
+    # is a loose package boundary.  It cannot win just because it is salient.
+    viable = []
+    for outer in distinct:
+        loose = False
+        for inner in distinct:
+            if inner is outer or inner["area"] >= outer["area"]:
+                continue
+            area_ratio = inner["area"] / outer["area"]
+            if 0.04 <= area_ratio <= 0.90 and _qz_is_contained(inner, outer):
+                if inner["score"] >= outer["score"] * 0.88:
+                    loose = True
+                    break
+        if not loose:
+            viable.append(outer)
+    if not viable:
+        return _qz_fail("QUIET_ZONE_NOT_DETECTED", capture_context)
+    viable.sort(key=lambda item: item["score"], reverse=True)
+    best = viable[0]
+    confidence = max(0.0, min(1.0, best["score"]))
+    if len(viable) > 1:
+        second_score = viable[1]["score"]
+        # Scores are now normalised [0, 1], so use both the legacy absolute
+        # margin and a relative margin.  Two separately located, similarly
+        # evidenced physical patches are inherently ambiguous even if texture
+        # noise moves one score by a few hundredths.
+        if (best["score"] - second_score) < QUIET_ZONE_MIN_SCORE_MARGIN or second_score >= best["score"] * 0.85:
+            return _qz_fail("QUIET_ZONE_DETECTION_AMBIGUOUS", capture_context, confidence)
+    if confidence < QUIET_ZONE_MIN_CONFIDENCE:
+        return _qz_fail("QUIET_ZONE_DETECTION_CONFIDENCE_TOO_LOW", capture_context, confidence)
+    canonical = best["warped"]
+    if canonical is None or canonical.shape != (QUIET_ZONE_CANONICAL_SIZE, QUIET_ZONE_CANONICAL_SIZE, 3):
+        return _qz_fail("CANONICAL_EXTRACTION_FAILED", capture_context)
+    return {
+        "success": True, "reason": "QUIET_ZONE_DETECTED", "confidence": round(confidence, 4),
+        "corners": [[round(float(x), 2), round(float(y), 2)] for x, y in best["quad"]],
+        "image": canonical, "capture_context": capture_context,
+        "metrics": {"detection_source": "hierarchical_boundary_scanner", "side_evidence": best["sides"], "post_warp": best["post"]},
     }
 
 
