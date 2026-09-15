@@ -4,8 +4,12 @@ These fixtures deliberately use no physical-size or capture-guide information.
 They assert localisation, not merely a successful response.
 """
 
+import asyncio
+import io
+
 import cv2
 import numpy as np
+from starlette.datastructures import UploadFile
 
 import main
 
@@ -97,3 +101,41 @@ def test_two_equally_supported_zones_are_ambiguous():
         "QUIET_ZONE_DETECTION_CONFIDENCE_TOO_LOW",
         "QUIET_ZONE_NOT_DETECTED",
     )
+
+
+def test_debug_quiet_zone_returns_the_extractor_canonical_png(monkeypatch):
+    """The debug endpoint must not substitute an annotated source frame."""
+    source = np.full((900, 900, 3), (20, 80, 150), dtype=np.uint8)
+    canonical = np.zeros((512, 512, 3), dtype=np.uint8)
+    canonical[:, :, 0] = 17
+    canonical[:, :, 1] = 93
+    canonical[:, :, 2] = 201
+    calls = []
+
+    def extractor(image, capture_context):
+        calls.append((image.shape, capture_context))
+        return {
+            "success": True,
+            "reason": "QUIET_ZONE_DETECTED",
+            "confidence": 0.8765,
+            "corners": [[100, 100], [700, 100], [700, 700], [100, 700]],
+            "image": canonical,
+            "capture_context": capture_context,
+        }
+
+    monkeypatch.setattr(main, "extract_quiet_zone", extractor)
+    encoded_ok, encoded_source = cv2.imencode(".jpg", source)
+    assert encoded_ok
+    upload = UploadFile(filename="camera.jpg", file=io.BytesIO(encoded_source.tobytes()))
+    response = asyncio.run(main.debug_quiet_zone(upload))
+
+    assert len(calls) == 1
+    assert calls[0][0] == source.shape
+    assert calls[0][1] == "debug"
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["X-Quiet-Zone-Confidence"] == "0.8765"
+    decoded = cv2.imdecode(np.frombuffer(response.body, dtype=np.uint8), cv2.IMREAD_COLOR)
+    assert decoded is not None
+    assert decoded.shape == (512, 512, 3)
+    assert np.array_equal(decoded, canonical)
