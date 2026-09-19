@@ -51,6 +51,10 @@ app.add_middleware(
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 DB_PATH = os.path.join(BASE_DIR, "fiberhash.db")
+QUIET_ZONE_EVIDENCE_DIR = os.environ.get(
+    "QUIET_ZONE_EVIDENCE_DIR",
+    os.path.join(BASE_DIR, "quiet_zone_evidence"),
+)
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
@@ -136,6 +140,25 @@ def init_db():
             ai_risk_score REAL,
             created_at TEXT
      )
+""")
+    cursor.execute("""
+       CREATE TABLE IF NOT EXISTS quiet_zone_evidence (
+            evidence_id TEXT PRIMARY KEY,
+            unit_id TEXT NOT NULL,
+            capture_type TEXT NOT NULL,
+            workflow TEXT NOT NULL,
+            image_reference TEXT NOT NULL,
+            canonical_sha256 TEXT NOT NULL,
+            extraction_confidence REAL,
+            extraction_reason TEXT,
+            capture_context TEXT,
+            related_event_id TEXT,
+            created_at TEXT NOT NULL
+       )
+""")
+    cursor.execute("""
+       CREATE INDEX IF NOT EXISTS idx_quiet_zone_evidence_unit_created
+       ON quiet_zone_evidence (unit_id, created_at)
 """)
     cursor.execute("""
        CREATE TABLE IF NOT EXISTS challenge_cases (
@@ -287,6 +310,53 @@ def save_bytes_to_file(file_bytes: bytes, filename_prefix: str) -> str:
 def read_file_bytes(file_path: str) -> bytes:
     with open(file_path, "rb") as f:
         return f.read()
+
+
+def _quiet_zone_evidence_root():
+    """Resolve the single configurable evidence root for every workflow."""
+    root = os.path.abspath(QUIET_ZONE_EVIDENCE_DIR)
+    os.makedirs(root, exist_ok=True)
+    return root
+
+
+def save_quiet_zone_evidence(
+    unit_id,
+    capture_type,
+    workflow,
+    canonical_image,
+    extraction_result,
+    related_event_id=None,
+):
+    """Append the exact successful canonical extraction as auditable evidence."""
+    if not extraction_result.get("success"):
+        raise ValueError("Quiet Zone evidence can only be saved for a successful extraction.")
+    if not isinstance(canonical_image, np.ndarray) or canonical_image.shape != (512, 512, 3):
+        raise ValueError("Quiet Zone evidence requires a 512x512x3 canonical image.")
+    encoded_ok, encoded = cv2.imencode(".png", canonical_image)
+    if not encoded_ok:
+        raise ValueError("Unable to encode Quiet Zone evidence image.")
+    evidence_id = str(uuid.uuid4())
+    image_bytes = encoded.tobytes()
+    image_reference = f"{evidence_id}.png"
+    with open(os.path.join(_quiet_zone_evidence_root(), image_reference), "wb") as handle:
+        handle.write(image_bytes)
+    record = (
+        evidence_id, unit_id, capture_type, workflow, image_reference,
+        hashlib.sha256(image_bytes).hexdigest(), extraction_result.get("confidence"),
+        extraction_result.get("reason"), extraction_result.get("capture_context"),
+        related_event_id, now_iso(),
+    )
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("""INSERT INTO quiet_zone_evidence (
+            evidence_id, unit_id, capture_type, workflow, image_reference,
+            canonical_sha256, extraction_confidence, extraction_reason,
+            capture_context, related_event_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", record)
+        conn.commit()
+    finally:
+        conn.close()
+    return {"evidence_id": evidence_id, "image_reference": image_reference}
 
 def decode_image(image_bytes: bytes):
     if not image_bytes:
@@ -2503,8 +2573,10 @@ def add_timeline_event(
         )
     )
 
+    event_id = str(cursor.lastrowid)
     conn.commit()
     conn.close()
+    return event_id
     
 def create_product_record(product_name, brand, batch_code, master_image_path, master_image_hash):
     product_id = str(uuid.uuid4())
@@ -3640,13 +3712,21 @@ async def verify_unit(
             package_result,
             seal_result,
         ) 
-        log_unit_verification_event(
+        verification_event_id = log_unit_verification_event(
             unit_id,
             decision,
             package_match,
             seal_match,
             trust_score,
             ai_risk,
+        )
+        save_quiet_zone_evidence(
+            unit_id, "package", "verification", package_scan_img, package_qz_result,
+            related_event_id=verification_event_id,
+        )
+        save_quiet_zone_evidence(
+            unit_id, "seal", "verification", seal_scan_img, seal_qz_result,
+            related_event_id=verification_event_id,
         )
         case_id = create_challenge_case(
             order_id=unit.get("order_id") or f"ORDER-{unit_id}",
@@ -3911,7 +3991,6 @@ async def register_unit(
 
         seal_img = seal_qz_result.get("image")
 
-
 # CASE 1: RAW UNIT REGISTRATION ONLY
 # This only runs when no package_image and no seal_image file was sent.
     if package_image is None and seal_image is None:
@@ -4013,6 +4092,14 @@ async def register_unit(
             seal_file_path,
             seal_hash
     )   
+        save_quiet_zone_evidence(
+            unit_id, "package", "seller_registration", package_img, package_qz_result,
+            related_event_id=unit_id,
+        )
+        save_quiet_zone_evidence(
+            unit_id, "seal", "seller_registration", seal_img, seal_qz_result,
+            related_event_id=unit_id,
+        )
         return {
             "status": "registered",
             "unit_id": unit_id,
@@ -4232,6 +4319,15 @@ async def register_brand_baseline_images(
 
         conn.commit()
         conn.close()
+
+        save_quiet_zone_evidence(
+            unit_id, "package", "brand_baseline", package_img, package_qz_result,
+            related_event_id=unit_id,
+        )
+        save_quiet_zone_evidence(
+            unit_id, "seal", "brand_baseline", seal_img, seal_qz_result,
+            related_event_id=unit_id,
+        )
 
         return {
             "status": "brand_baseline_images_registered",
@@ -5428,6 +5524,46 @@ async def seller_trust_dashboard():
         "seller_count": len(sellers),
         "sellers": sellers
     }
+@app.get("/api/v1/units/{unit_id}/quiet-zone-evidence")
+async def get_quiet_zone_evidence(unit_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute("""SELECT * FROM quiet_zone_evidence
+            WHERE unit_id = ? ORDER BY created_at ASC""", (unit_id,)).fetchall()
+    finally:
+        conn.close()
+    evidence = [{
+        "evidence_id": row["evidence_id"], "unit_id": row["unit_id"],
+        "workflow": row["workflow"], "capture_type": row["capture_type"],
+        "timestamp": row["created_at"], "confidence": row["extraction_confidence"],
+        "reason": row["extraction_reason"], "capture_context": row["capture_context"],
+        "related_event_id": row["related_event_id"],
+        "image_url": f"/api/v1/quiet-zone-evidence/{row['evidence_id']}/image",
+    } for row in rows]
+    return {"unit_id": unit_id, "count": len(evidence), "evidence": evidence}
+
+
+@app.get("/api/v1/quiet-zone-evidence/{evidence_id}/image", response_class=Response,
+         responses={200: {"content": {"image/png": {}}}})
+async def get_quiet_zone_evidence_image(evidence_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        row = conn.execute("SELECT image_reference FROM quiet_zone_evidence WHERE evidence_id = ?", (evidence_id,)).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Quiet Zone evidence not found.")
+    # The database holds only generated basenames; callers can never select a path.
+    filename = os.path.basename(row[0])
+    if filename != row[0]:
+        raise HTTPException(status_code=500, detail="Invalid Quiet Zone evidence reference.")
+    image_path = os.path.join(_quiet_zone_evidence_root(), filename)
+    if not os.path.isfile(image_path):
+        raise HTTPException(status_code=404, detail="Quiet Zone evidence image not found.")
+    return FileResponse(image_path, media_type="image/png")
+
+
 @app.post(
     "/debug/quiet-zone",
     response_class=Response,

@@ -6,6 +6,7 @@ They assert localisation, not merely a successful response.
 
 import asyncio
 import io
+import inspect
 
 import cv2
 import numpy as np
@@ -139,3 +140,98 @@ def test_debug_quiet_zone_returns_the_extractor_canonical_png(monkeypatch):
     assert decoded is not None
     assert decoded.shape == (512, 512, 3)
     assert np.array_equal(decoded, canonical)
+
+
+def test_quiet_zone_evidence_is_append_only_and_served_from_controlled_id(tmp_path, monkeypatch):
+    temp_dir = tmp_path
+    monkeypatch.setattr(main, "DB_PATH", str(temp_dir / "evidence.db"))
+    monkeypatch.setattr(main, "QUIET_ZONE_EVIDENCE_DIR", str(temp_dir / "evidence-files"))
+    main.init_db()
+    canonical = np.full((512, 512, 3), 123, dtype=np.uint8)
+    result = {
+        "success": True,
+        "confidence": 0.91,
+        "reason": "QUIET_ZONE_DETECTED",
+        "capture_context": "test",
+    }
+    first = main.save_quiet_zone_evidence(
+        "UNIT-1", "package", "brand_baseline", canonical, result, related_event_id="UNIT-1",
+    )
+    second = main.save_quiet_zone_evidence("UNIT-1", "seal", "verification", canonical, result)
+    assert first["evidence_id"] != second["evidence_id"]
+    history = asyncio.run(main.get_quiet_zone_evidence("UNIT-1"))
+    assert history["count"] == 2
+    assert [item["capture_type"] for item in history["evidence"]] == ["package", "seal"]
+    assert history["evidence"][0]["related_event_id"] == "UNIT-1"
+    image = asyncio.run(main.get_quiet_zone_evidence_image(first["evidence_id"]))
+    decoded = cv2.imread(image.path)
+    assert decoded.shape == (512, 512, 3)
+    assert np.array_equal(decoded, canonical)
+
+
+def test_quiet_zone_evidence_rejects_failed_or_noncanonical_results(tmp_path, monkeypatch):
+    temp_dir = tmp_path
+    monkeypatch.setattr(main, "DB_PATH", str(temp_dir / "evidence.db"))
+    monkeypatch.setattr(main, "QUIET_ZONE_EVIDENCE_DIR", str(temp_dir / "evidence-files"))
+    main.init_db()
+    canonical = np.zeros((512, 512, 3), dtype=np.uint8)
+    failed = {"success": False, "reason": "QUIET_ZONE_NOT_DETECTED"}
+
+    try:
+        main.save_quiet_zone_evidence("UNIT-1", "package", "verification", canonical, failed)
+        assert False, "failed extraction must not create evidence"
+    except ValueError:
+        pass
+    try:
+        main.save_quiet_zone_evidence(
+            "UNIT-1", "package", "verification", np.zeros((500, 500, 3), dtype=np.uint8),
+            {"success": True},
+        )
+        assert False, "non-canonical image must not create evidence"
+    except ValueError:
+        pass
+
+    conn = main.sqlite3.connect(main.DB_PATH)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM quiet_zone_evidence").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_quiet_zone_evidence_root_is_configurable_and_not_exposed(tmp_path, monkeypatch):
+    temp_dir = tmp_path
+    configured_root = temp_dir / "custom-evidence-root"
+    monkeypatch.setattr(main, "DB_PATH", str(temp_dir / "evidence.db"))
+    monkeypatch.setattr(main, "QUIET_ZONE_EVIDENCE_DIR", str(configured_root))
+    main.init_db()
+    canonical = np.full((512, 512, 3), 47, dtype=np.uint8)
+    evidence = main.save_quiet_zone_evidence(
+        "UNIT-2", "package", "verification", canonical,
+        {"success": True, "confidence": 0.5, "reason": "QUIET_ZONE_DETECTED"},
+    )
+
+    assert main._quiet_zone_evidence_root() == str(configured_root)
+    assert (configured_root / f"{evidence['evidence_id']}.png").is_file()
+    history = asyncio.run(main.get_quiet_zone_evidence("UNIT-2"))
+    assert history["evidence"][0]["image_url"] == (
+        f"/api/v1/quiet-zone-evidence/{evidence['evidence_id']}/image"
+    )
+    assert str(configured_root) not in str(history)
+    try:
+        asyncio.run(main.get_quiet_zone_evidence_image("..%2Ffiberhash.db"))
+        assert False, "an arbitrary filename must not be retrievable"
+    except main.HTTPException as error:
+        assert error.status_code == 404
+
+
+def test_all_production_quiet_zone_workflows_record_both_capture_types():
+    expected = {
+        main.verify_unit: "verification",
+        main.register_unit: "seller_registration",
+        main.register_brand_baseline_images: "brand_baseline",
+    }
+    for endpoint, workflow in expected.items():
+        source = inspect.getsource(endpoint)
+        assert f'"package", "{workflow}"' in source
+        assert f'"seal", "{workflow}"' in source
+    assert "save_quiet_zone_evidence" not in inspect.getsource(main.debug_quiet_zone)
