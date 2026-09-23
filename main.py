@@ -153,9 +153,15 @@ def init_db():
             extraction_reason TEXT,
             capture_context TEXT,
             related_event_id TEXT,
+            diagnostics_json TEXT,
             created_at TEXT NOT NULL
        )
 """)
+    evidence_columns = {
+        row[1] for row in cursor.execute("PRAGMA table_info(quiet_zone_evidence)").fetchall()
+    }
+    if "diagnostics_json" not in evidence_columns:
+        cursor.execute("ALTER TABLE quiet_zone_evidence ADD COLUMN diagnostics_json TEXT")
     cursor.execute("""
        CREATE INDEX IF NOT EXISTS idx_quiet_zone_evidence_unit_created
        ON quiet_zone_evidence (unit_id, created_at)
@@ -344,15 +350,15 @@ def save_quiet_zone_evidence(
         evidence_id, unit_id, capture_type, workflow, image_reference,
         hashlib.sha256(image_bytes).hexdigest(), extraction_result.get("confidence"),
         extraction_result.get("reason"), extraction_result.get("capture_context"),
-        related_event_id, now_iso(),
+        related_event_id, json.dumps(extraction_result.get("metrics", {}), sort_keys=True), now_iso(),
     )
     conn = sqlite3.connect(DB_PATH)
     try:
         conn.execute("""INSERT INTO quiet_zone_evidence (
             evidence_id, unit_id, capture_type, workflow, image_reference,
             canonical_sha256, extraction_confidence, extraction_reason,
-            capture_context, related_event_id, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", record)
+            capture_context, related_event_id, diagnostics_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", record)
         conn.commit()
     finally:
         conn.close()
@@ -393,6 +399,14 @@ QUIET_ZONE_MIN_CONFIDENCE = 0.78
 
 # If two candidates score too similarly, we do not guess.
 QUIET_ZONE_MIN_SCORE_MARGIN = 0.08 
+
+# Localisation evaluates boundary contrast at several spatial scales.  These
+# are not capture-quality thresholds: they let a real, slightly softened
+# material transition remain localisable when its relative side evidence and
+# geometry are still convincing.
+QUIET_ZONE_SIDE_GRADIENT_SIGMAS = (0.0, 1.2, 2.4)
+QUIET_ZONE_MIN_SIDE_COVERAGE = 0.30
+QUIET_ZONE_MIN_SIDE_RELATIVE_CONTRAST = 1.18
 def _order_quiet_zone_points(points):
     """
     Return four points in this order:
@@ -1703,7 +1717,18 @@ def _qz_intersection(line_a, line_b):
     return np.linalg.solve(matrix, np.array([line_a[2], line_b[2]], dtype=np.float32))
 
 
-def _qz_refine_and_support(gray, quad):
+def _qz_multi_scale_gradient(gray):
+    """One reusable original-resolution boundary-evidence map per capture."""
+    magnitudes = []
+    for sigma in QUIET_ZONE_SIDE_GRADIENT_SIGMAS:
+        source = gray if sigma <= 0.0 else cv2.GaussianBlur(gray, (0, 0), sigmaX=sigma)
+        gradient_x = cv2.Sobel(source, cv2.CV_32F, 1, 0, ksize=3)
+        gradient_y = cv2.Sobel(source, cv2.CV_32F, 0, 1, ksize=3)
+        magnitudes.append(cv2.magnitude(gradient_x, gradient_y))
+    return np.maximum.reduce(magnitudes)
+
+
+def _qz_refine_and_support(gray, quad, multi_scale_magnitude=None):
     """Refine every side against original-resolution gradient evidence.
 
     Each side is searched independently along its normal.  The four selected
@@ -1711,9 +1736,12 @@ def _qz_refine_and_support(gray, quad):
     rather than from a contour approximation alone.
     """
     quad = _qz_order_quad(quad)
-    gradient_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
-    gradient_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
-    magnitude = cv2.magnitude(gradient_x, gradient_y)
+    # A sharp-edge-only map makes localisation accidentally act as a blur
+    # classifier.  Preserve original-resolution refinement, but aggregate
+    # gradient evidence at several scales so softened physical transitions can
+    # still support a side relative to their local neighbourhood.
+    if multi_scale_magnitude is None:
+        multi_scale_magnitude = _qz_multi_scale_gradient(gray)
     height, width = gray.shape[:2]
     lines = []
     evidence = []
@@ -1736,21 +1764,34 @@ def _qz_refine_and_support(gray, quad):
             xs = base_x + normal[0] * offset
             ys = base_y + normal[1] * offset
             values = cv2.remap(
-                magnitude, xs.reshape(1, -1), ys.reshape(1, -1),
+                multi_scale_magnitude, xs.reshape(1, -1), ys.reshape(1, -1),
                 cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT,
             ).reshape(-1)
+            # A broad band around the predicted side supplies the local
+            # baseline.  Relative contrast and percentile coverage are robust
+            # to modest hand motion while isolated printed strokes remain
+            # insufficiently distributed along the side.
+            baseline = float(np.percentile(values, 35))
+            threshold = max(8.0, baseline * 1.35)
             median = float(np.median(values))
-            support = float(np.mean(values >= 28.0))
-            # Median prevents a short printed stroke from serving as a side.
-            score = median * (0.55 + 0.45 * support)
+            upper = float(np.percentile(values, 70))
+            support = float(np.mean(values >= threshold))
+            relative_contrast = upper / (baseline + 1.0)
+            score = relative_contrast * (0.45 + 0.55 * support)
             if best is None or score > best[0]:
-                best = (score, offset, median, support)
+                best = (score, offset, median, support, baseline, relative_contrast)
         if best is None:
             return None
-        _, offset, median, support = best
+        _, offset, median, support, baseline, relative_contrast = best
         shifted = start + normal * offset
         lines.append((float(normal[0]), float(normal[1]), float(np.dot(normal, shifted))))
-        evidence.append({"gradient": median, "coverage": support, "offset": int(offset)})
+        evidence.append({
+            "gradient": round(median, 3),
+            "coverage": round(support, 4),
+            "offset": int(offset),
+            "local_baseline": round(baseline, 3),
+            "relative_contrast": round(relative_contrast, 3),
+        })
 
     refined = []
     for index in range(4):
@@ -1809,6 +1850,50 @@ def _qz_post_warp_validation(warped):
     if max(ratios) > 5.0:
         return None
     return {"core_std": round(float(np.std(core)), 3), "directional_coherence": round(float(coherence), 3), "edge_band_ratio_max": round(max(ratios), 3)}
+
+
+def _qz_surface_material_eligibility(warped, post):
+    """Require a candidate warp to describe a filled material surface.
+
+    A foreground glyph can have strong local edges and still fit a four-sided
+    contour, but its interior is mostly the surrounding flat background with
+    edge energy concentrated in only a few tiles.  A physical surface may have
+    handwriting or a border, yet its material texture is distributed across
+    the interior.  This is evaluated after warp, independently of candidate
+    proposal source, colour, position, or text content.
+    """
+    if post is None:
+        return None
+    gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
+    core = gray[64:-64, 64:-64]
+    if core.shape != (384, 384):
+        return None
+    gx = cv2.Sobel(core, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(core, cv2.CV_32F, 0, 1, ksize=3)
+    magnitude = cv2.magnitude(gx, gy)
+    tile_energy = []
+    for y in range(0, core.shape[0], 48):
+        for x in range(0, core.shape[1], 48):
+            tile_energy.append(float(np.mean(magnitude[y:y + 48, x:x + 48])))
+    values = np.asarray(tile_energy, dtype=np.float32)
+    low_texture = float(np.percentile(values, 30))
+    high_texture = float(np.percentile(values, 90))
+    # The floor is partly absolute (to reject quantisation/background noise)
+    # and partly image-local (to reject sparse high-contrast foreground marks).
+    # The lower percentile and occupancy distinguish distributed material
+    # texture from a sparse foreground glyph.  Keep the absolute floor low
+    # enough for a genuinely physical surface softened by moderate motion
+    # blur: it is still distributed across the region, unlike text/strokes.
+    distributed_floor = max(5.0, high_texture * 0.18)
+    occupancy = float(np.mean(values >= distributed_floor))
+    eligible = low_texture >= distributed_floor and occupancy >= 0.40
+    return {
+        "eligible": bool(eligible),
+        "tile_gradient_p30": round(low_texture, 3),
+        "tile_gradient_p90": round(high_texture, 3),
+        "tile_gradient_occupancy": round(occupancy, 3),
+        "tile_gradient_floor": round(float(distributed_floor), 3),
+    }
 
 
 def _qz_is_contained(inner, outer):
@@ -1889,6 +1974,7 @@ def extract_quiet_zone(image, capture_context="factory_registration"):
         original_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     except cv2.error:
         return _qz_fail("GRAYSCALE_CONVERSION_FAILED", capture_context)
+    original_multi_scale_gradient = _qz_multi_scale_gradient(original_gray)
 
     scale = min(1.0, 1200.0 / float(max(original_width, original_height)))
     discovery_image = cv2.resize(image, (int(round(original_width * scale)), int(round(original_height * scale))), interpolation=cv2.INTER_AREA) if scale < 1.0 else image
@@ -1949,14 +2035,17 @@ def extract_quiet_zone(image, capture_context="factory_registration"):
         # contour discovery; side refinement later re-establishes each edge.
         edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
         contours, hierarchy = cv2.findContours(edges, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        contours = list(contours)
+        proposal_sources = ["edge_contour"] * len(contours)
         hierarchy = hierarchy[0] if hierarchy is not None else []
-        # Preserve colour-region components as additional physical-boundary
-        # hypotheses.  Their contours are independent of texture strokes that
-        # can join a patch outline to its interior in an edge map.
-        region_contours, _ = cv2.findContours(low_chroma, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        if region_contours:
-            contours = list(contours) + list(region_contours) + material_contours
-            hierarchy = []
+        # Low-chroma segmentation remains useful as a transition/edge cue,
+        # but a filled chroma-neutral component is not, by itself, evidence
+        # of a physical surface.  Printed graphics and information panels can
+        # form such components.  Physical-region hypotheses instead require
+        # the independently sampled material component above; all other
+        # proposals come from four-sided edge contours.
+        contours = contours + material_contours
+        proposal_sources.extend(["material_region"] * len(material_contours))
         # Texture can create thousands of tiny contours.  The 300 largest are
         # more than sufficient after the area gate, and retain both outer and
         # nested physical boundaries without making refinement data-dependent.
@@ -1985,7 +2074,9 @@ def extract_quiet_zone(image, capture_context="factory_registration"):
                     continue
                 discovery_seen.add(discovery_key)
                 original_quad = geometry["quad"] / float(scale)
-                refined_result = _qz_refine_and_support(original_gray, original_quad)
+                refined_result = _qz_refine_and_support(
+                    original_gray, original_quad, original_multi_scale_gradient,
+                )
                 if refined_result is None:
                     continue
                 refined, sides = refined_result
@@ -1993,10 +2084,14 @@ def extract_quiet_zone(image, capture_context="factory_registration"):
                 if refined_geometry is None or min(refined_geometry["lengths"]) < 80.0:
                     continue
                 side_coverages = [item["coverage"] for item in sides]
-                side_gradients = [item["gradient"] for item in sides]
+                side_relative_contrasts = [item["relative_contrast"] for item in sides]
                 # Every physical side needs evidence.  A single bright contour
                 # fragment is never enough to establish a Quiet Zone boundary.
-                if min(side_coverages) < 0.42 or min(side_gradients) < 18.0:
+                # This is deliberately relative evidence, not an image-
+                # sharpness threshold: a mildly soft but coherent four-sided
+                # physical boundary can remain localisable.
+                if (min(side_coverages) < QUIET_ZONE_MIN_SIDE_COVERAGE or
+                        min(side_relative_contrasts) < QUIET_ZONE_MIN_SIDE_RELATIVE_CONTRAST):
                     continue
                 try:
                     warped = _qz_warp(image, refined)
@@ -2005,12 +2100,39 @@ def extract_quiet_zone(image, capture_context="factory_registration"):
                     continue
                 if post is None:
                     continue
-                support = float(np.mean(side_coverages)) * min(1.0, float(np.mean(side_gradients)) / 80.0)
-                score = 0.44 * support + 0.31 * refined_geometry["right_angle"] + 0.17 * refined_geometry["aspect"] + 0.08 * (1.0 - post["directional_coherence"])
-                parent_index = int(hierarchy[contour_index][3]) if len(hierarchy) else -1
+                surface = _qz_surface_material_eligibility(warped, post)
+                if surface is None or not surface["eligible"]:
+                    continue
+                # Coverage is a distributed-boundary measure, not a demand
+                # that every sampled pixel be an edge.  Scale it from the
+                # already-required minimum to a full-support band; otherwise
+                # ordinary softness artificially caps localisation confidence.
+                coverage_strength = float(np.clip(
+                    (float(np.mean(side_coverages)) - QUIET_ZONE_MIN_SIDE_COVERAGE) / 0.20,
+                    0.0, 1.0,
+                ))
+                contrast_strength = float(np.clip(
+                    (float(np.mean(side_relative_contrasts)) - QUIET_ZONE_MIN_SIDE_RELATIVE_CONTRAST) / 0.50,
+                    0.0, 1.0,
+                ))
+                support = 0.5 * coverage_strength + 0.5 * contrast_strength
+                geometry_score = 0.65 * refined_geometry["right_angle"] + 0.35 * refined_geometry["aspect"]
+                # Geometry is a prerequisite for a physical four-sided
+                # surface, not merely an additive bonus.  Squaring the
+                # normalised coherence keeps a well-formed patch near its
+                # existing score while preventing a high-contrast printed
+                # graphic with weak rectangular geometry from competing with
+                # a true Quiet Zone solely on side contrast.
+                score = 0.44 * support + 0.39 * (geometry_score ** 2) + 0.17 * (1.0 - post["directional_coherence"])
+                parent_index = (
+                    int(hierarchy[contour_index][3])
+                    if contour_index < len(hierarchy) else -1
+                )
                 candidates.append({
                     **refined_geometry, "score": float(score), "warped": warped,
-                    "sides": sides, "post": post, "contour_parent": parent_index,
+                    "sides": sides, "post": post, "surface": surface, "contour_parent": parent_index,
+                    "proposal_source": proposal_sources[contour_index],
+                    "support_score": float(support), "geometry_score": float(geometry_score),
                 })
 
     # A dark physical border may be a set of four interrupted line segments,
@@ -2018,7 +2140,9 @@ def extract_quiet_zone(image, capture_context="factory_registration"):
     # pairs only when contour discovery established no viable candidate.
     if False and not candidates:  # Retained helper is intentionally disabled pending real-capture line-fit tuning.
         for hypothesis in _qz_hough_quads(discovery_gray):
-            refined_result = _qz_refine_and_support(original_gray, hypothesis["quad"] / float(scale))
+            refined_result = _qz_refine_and_support(
+                original_gray, hypothesis["quad"] / float(scale), original_multi_scale_gradient,
+            )
             if refined_result is None:
                 continue
             refined, sides = refined_result
@@ -2091,11 +2215,25 @@ def extract_quiet_zone(image, capture_context="factory_registration"):
     canonical = best["warped"]
     if canonical is None or canonical.shape != (QUIET_ZONE_CANONICAL_SIZE, QUIET_ZONE_CANONICAL_SIZE, 3):
         return _qz_fail("CANONICAL_EXTRACTION_FAILED", capture_context)
+    canonical_quality = canonical_quiet_zone_quality(canonical)
+    ambiguity_margin = None
+    if len(viable) > 1:
+        ambiguity_margin = round(float(best["score"] - viable[1]["score"]), 4)
     return {
         "success": True, "reason": "QUIET_ZONE_DETECTED", "confidence": round(confidence, 4),
         "corners": [[round(float(x), 2), round(float(y), 2)] for x, y in best["quad"]],
         "image": canonical, "capture_context": capture_context,
-        "metrics": {"detection_source": "hierarchical_boundary_scanner", "side_evidence": best["sides"], "post_warp": best["post"]},
+        "metrics": {
+            "detection_source": "hierarchical_boundary_scanner",
+            "localisation_confidence": round(confidence, 4),
+            "geometry_score": round(best["geometry_score"], 4),
+            "side_support": round(best["support_score"], 4),
+            "side_evidence": best["sides"],
+            "post_warp": best["post"],
+            "surface_eligibility": best["surface"],
+            "ambiguity_margin": ambiguity_margin,
+            "canonical_quality": canonical_quality,
+        },
     }
 
 
@@ -2292,6 +2430,38 @@ def quality_assessment(image):
         "height": height,
         "quality_flags": flags,
     }
+
+
+def canonical_quiet_zone_quality(image):
+    """Assess the exact canonical image without modifying its pixels."""
+    if (not isinstance(image, np.ndarray) or
+            image.shape != (QUIET_ZONE_CANONICAL_SIZE, QUIET_ZONE_CANONICAL_SIZE, 3)):
+        return {
+            "quality_score": 0.0,
+            "blur_variance": 0.0,
+            "brightness": 0.0,
+            "glare_score": 0.0,
+            "width": 0,
+            "height": 0,
+            "quality_flags": ["INVALID_CANONICAL_SHAPE"],
+        }
+    return quality_assessment(image)
+
+
+def baseline_quiet_zone_quality_failure(quality):
+    """Return a semantic baseline-rejection reason using existing quality policy."""
+    flags = set((quality or {}).get("quality_flags", []))
+    if "INVALID_CANONICAL_SHAPE" in flags or "INVALID_IMAGE" in flags:
+        return "QUIET_ZONE_CANONICAL_INVALID"
+    if "IMAGE_TOO_BLURRY" in flags:
+        return "QUIET_ZONE_IMAGE_TOO_BLURRY"
+    if "GLARE_DETECTED" in flags:
+        return "QUIET_ZONE_EXCESSIVE_GLARE"
+    if "IMAGE_TOO_DARK" in flags or "IMAGE_TOO_BRIGHT" in flags:
+        return "QUIET_ZONE_QUALITY_TOO_LOW"
+    if float((quality or {}).get("quality_score", 0.0)) < 50.0:
+        return "QUIET_ZONE_QUALITY_TOO_LOW"
+    return None
 
 
 # ============================================================
@@ -3991,6 +4161,46 @@ async def register_unit(
 
         seal_img = seal_qz_result.get("image")
 
+    if package_qz_result is not None and seal_qz_result is not None:
+        package_quality = package_qz_result.get("metrics", {}).get(
+            "canonical_quality", canonical_quiet_zone_quality(package_img),
+        )
+        seal_quality = seal_qz_result.get("metrics", {}).get(
+            "canonical_quality", canonical_quiet_zone_quality(seal_img),
+        )
+        package_quality_failure = baseline_quiet_zone_quality_failure(package_quality)
+        seal_quality_failure = baseline_quiet_zone_quality_failure(seal_quality)
+        if package_quality_failure or seal_quality_failure:
+            # The canonical extraction is still valid evidence even though it
+            # is not acceptable as a fingerprint baseline/reference.
+            save_quiet_zone_evidence(
+                unit_id, "package", "seller_registration", package_img, package_qz_result,
+                related_event_id=unit_id,
+            )
+            save_quiet_zone_evidence(
+                unit_id, "seal", "seller_registration", seal_img, seal_qz_result,
+                related_event_id=unit_id,
+            )
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "status": "error",
+                    "message": "Package or seal baseline Quiet Zone failed image-quality validation.",
+                    "package_quiet_zone": {
+                        "success": True,
+                        "reason": package_quality_failure or "QUIET_ZONE_DETECTED",
+                        "confidence": package_qz_result.get("confidence", 0.0),
+                        "quality": package_quality,
+                    },
+                    "seal_quiet_zone": {
+                        "success": True,
+                        "reason": seal_quality_failure or "QUIET_ZONE_DETECTED",
+                        "confidence": seal_qz_result.get("confidence", 0.0),
+                        "quality": seal_quality,
+                    },
+                },
+            )
+
 # CASE 1: RAW UNIT REGISTRATION ONLY
 # This only runs when no package_image and no seal_image file was sent.
     if package_image is None and seal_image is None:
@@ -4257,6 +4467,46 @@ async def register_brand_baseline_images(
 
         package_img = package_qz_result.get("image")
         seal_img = seal_qz_result.get("image")
+
+        package_quality = package_qz_result.get("metrics", {}).get(
+            "canonical_quality", canonical_quiet_zone_quality(package_img),
+        )
+        seal_quality = seal_qz_result.get("metrics", {}).get(
+            "canonical_quality", canonical_quiet_zone_quality(seal_img),
+        )
+        package_quality_failure = baseline_quiet_zone_quality_failure(package_quality)
+        seal_quality_failure = baseline_quiet_zone_quality_failure(seal_quality)
+
+        if package_quality_failure or seal_quality_failure:
+            # Preserve an exact successful canonical extraction for audit,
+            # while deliberately refusing to replace the baseline reference.
+            save_quiet_zone_evidence(
+                unit_id, "package", "brand_baseline", package_img, package_qz_result,
+                related_event_id=unit_id,
+            )
+            save_quiet_zone_evidence(
+                unit_id, "seal", "brand_baseline", seal_img, seal_qz_result,
+                related_event_id=unit_id,
+            )
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "status": "error",
+                    "message": "Package or seal brand baseline failed Quiet Zone image-quality validation.",
+                    "package_quiet_zone": {
+                        "success": True,
+                        "reason": package_quality_failure or "QUIET_ZONE_DETECTED",
+                        "confidence": package_qz_result.get("confidence", 0.0),
+                        "quality": package_quality,
+                    },
+                    "seal_quiet_zone": {
+                        "success": True,
+                        "reason": seal_quality_failure or "QUIET_ZONE_DETECTED",
+                        "confidence": seal_qz_result.get("confidence", 0.0),
+                        "quality": seal_quality,
+                    },
+                },
+            )
 
         package_ok, package_encoded = cv2.imencode(".jpg", package_img)
         seal_ok, seal_encoded = cv2.imencode(".jpg", seal_img)
