@@ -250,16 +250,12 @@ def test_canonical_quality_separates_blur_from_localisation():
     blurred_canonical = np.full((512, 512, 3), 140, dtype=np.uint8)
     quality = main.canonical_quiet_zone_quality(blurred_canonical)
     assert quality["quality_flags"] == ["IMAGE_TOO_BLURRY"]
-    assert main.baseline_quiet_zone_quality_failure(quality) == (
-        "QUIET_ZONE_IMAGE_TOO_BLURRY"
-    )
 
     rng = np.random.default_rng(123)
     sharp_canonical = rng.integers(0, 255, (512, 512, 3), dtype=np.uint8)
     sharp_quality = main.canonical_quiet_zone_quality(sharp_canonical)
     assert sharp_quality["width"] == 512
     assert sharp_quality["height"] == 512
-    assert main.baseline_quiet_zone_quality_failure(sharp_quality) is None
 
 
 def test_existing_verification_policy_receives_quality_warning_after_localisation():
@@ -276,7 +272,19 @@ def test_existing_verification_policy_receives_quality_warning_after_localisatio
     assert decision["is_match"] is True
 
 
-def test_brand_baseline_quality_rejection_is_not_reported_as_localisation_failure(
+def test_downstream_verification_retains_blur_quality_assessment():
+    canonical = np.full((512, 512, 3), 140, dtype=np.uint8)
+    encoded_ok, encoded = cv2.imencode(".jpg", canonical)
+    assert encoded_ok
+
+    result = main.run_verification(encoded.tobytes(), encoded.tobytes())
+
+    assert "IMAGE_TOO_BLURRY" in result["quality"]["quality_flags"]
+    assert result["decision"] == "review"
+    assert "matching" in result
+
+
+def test_brand_baseline_accepts_localised_canonical_with_quality_warning(
     tmp_path,
     monkeypatch,
 ):
@@ -315,15 +323,63 @@ def test_brand_baseline_quality_rejection_is_not_reported_as_localisation_failur
             seal_capture_context="brand_baseline",
         )
     )
-    payload = json.loads(response.body)
-    assert response.status_code == 422
-    assert payload["package_quiet_zone"]["success"] is True
-    assert payload["package_quiet_zone"]["reason"] == "QUIET_ZONE_IMAGE_TOO_BLURRY"
+    assert response["status"] == "brand_baseline_images_registered"
+    assert response["unit_id"] == "UNIT-QUALITY"
+    assert (tmp_path / "uploads" / f"{response['package_hash']}.jpg").is_file()
+    assert (tmp_path / "uploads" / f"{response['seal_hash']}.jpg").is_file()
 
     conn = main.sqlite3.connect(main.DB_PATH)
     try:
-        # Quality rejection prevents reference storage, not preservation of
-        # the exact successfully localised canonical capture as evidence.
+        assert conn.execute("SELECT COUNT(*) FROM quiet_zone_evidence").fetchone()[0] == 2
+    finally:
+        conn.close()
+
+
+def test_seller_registration_accepts_localised_canonical_with_quality_warning(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(main, "DB_PATH", str(tmp_path / "seller-quality.db"))
+    monkeypatch.setattr(main, "QUIET_ZONE_EVIDENCE_DIR", str(tmp_path / "evidence-files"))
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "uploads").mkdir()
+    main.init_db()
+    canonical = np.full((512, 512, 3), 140, dtype=np.uint8)
+    quality = main.canonical_quiet_zone_quality(canonical)
+    assert quality["quality_flags"] == ["IMAGE_TOO_BLURRY"]
+
+    monkeypatch.setattr(main, "decode_image", lambda _: np.zeros((900, 900, 3), dtype=np.uint8))
+    monkeypatch.setattr(
+        main,
+        "extract_quiet_zone",
+        lambda image, capture_context: {
+            "success": True,
+            "reason": "QUIET_ZONE_DETECTED",
+            "confidence": 0.9,
+            "image": canonical,
+            "metrics": {"canonical_quality": quality},
+            "capture_context": capture_context,
+        },
+    )
+
+    response = asyncio.run(
+        main.register_unit(
+            "UNIT-SELLER-QUALITY", "ORDER", "SELLER", "BUYER", "MARKET", "PRODUCT",
+            "Product", "Brand", "Batch",
+            UploadFile(filename="package.jpg", file=io.BytesIO(b"package")),
+            UploadFile(filename="seal.jpg", file=io.BytesIO(b"seal")),
+            package_capture_context="seller_registration",
+            seal_capture_context="seller_registration",
+        )
+    )
+
+    assert response["status"] == "registered"
+    assert response["unit_id"] == "UNIT-SELLER-QUALITY"
+    assert (tmp_path / "uploads" / f"{response['package_hash']}.jpg").is_file()
+    assert (tmp_path / "uploads" / f"{response['seal_hash']}.jpg").is_file()
+
+    conn = main.sqlite3.connect(main.DB_PATH)
+    try:
         assert conn.execute("SELECT COUNT(*) FROM quiet_zone_evidence").fetchone()[0] == 2
     finally:
         conn.close()

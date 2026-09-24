@@ -4503,46 +4503,6 @@ async def register_unit(
 
         seal_img = seal_qz_result.get("image")
 
-    if package_qz_result is not None and seal_qz_result is not None:
-        package_quality = package_qz_result.get("metrics", {}).get(
-            "canonical_quality", canonical_quiet_zone_quality(package_img),
-        )
-        seal_quality = seal_qz_result.get("metrics", {}).get(
-            "canonical_quality", canonical_quiet_zone_quality(seal_img),
-        )
-        package_quality_failure = baseline_quiet_zone_quality_failure(package_quality)
-        seal_quality_failure = baseline_quiet_zone_quality_failure(seal_quality)
-        if package_quality_failure or seal_quality_failure:
-            # The canonical extraction is still valid evidence even though it
-            # is not acceptable as a fingerprint baseline/reference.
-            save_quiet_zone_evidence(
-                unit_id, "package", "seller_registration", package_img, package_qz_result,
-                related_event_id=unit_id,
-            )
-            save_quiet_zone_evidence(
-                unit_id, "seal", "seller_registration", seal_img, seal_qz_result,
-                related_event_id=unit_id,
-            )
-            return JSONResponse(
-                status_code=422,
-                content={
-                    "status": "error",
-                    "message": "Package or seal baseline Quiet Zone failed image-quality validation.",
-                    "package_quiet_zone": {
-                        "success": True,
-                        "reason": package_quality_failure or "QUIET_ZONE_DETECTED",
-                        "confidence": package_qz_result.get("confidence", 0.0),
-                        "quality": package_quality,
-                    },
-                    "seal_quiet_zone": {
-                        "success": True,
-                        "reason": seal_quality_failure or "QUIET_ZONE_DETECTED",
-                        "confidence": seal_qz_result.get("confidence", 0.0),
-                        "quality": seal_quality,
-                    },
-                },
-            )
-
 # CASE 1: RAW UNIT REGISTRATION ONLY
 # This only runs when no package_image and no seal_image file was sent.
     if package_image is None and seal_image is None:
@@ -4837,46 +4797,6 @@ async def register_brand_baseline_images(
 
         package_img = package_qz_result.get("image")
         seal_img = seal_qz_result.get("image")
-
-        package_quality = package_qz_result.get("metrics", {}).get(
-            "canonical_quality", canonical_quiet_zone_quality(package_img),
-        )
-        seal_quality = seal_qz_result.get("metrics", {}).get(
-            "canonical_quality", canonical_quiet_zone_quality(seal_img),
-        )
-        package_quality_failure = baseline_quiet_zone_quality_failure(package_quality)
-        seal_quality_failure = baseline_quiet_zone_quality_failure(seal_quality)
-
-        if package_quality_failure or seal_quality_failure:
-            # Preserve an exact successful canonical extraction for audit,
-            # while deliberately refusing to replace the baseline reference.
-            save_quiet_zone_evidence(
-                unit_id, "package", "brand_baseline", package_img, package_qz_result,
-                related_event_id=unit_id,
-            )
-            save_quiet_zone_evidence(
-                unit_id, "seal", "brand_baseline", seal_img, seal_qz_result,
-                related_event_id=unit_id,
-            )
-            return JSONResponse(
-                status_code=422,
-                content={
-                    "status": "error",
-                    "message": "Package or seal brand baseline failed Quiet Zone image-quality validation.",
-                    "package_quiet_zone": {
-                        "success": True,
-                        "reason": package_quality_failure or "QUIET_ZONE_DETECTED",
-                        "confidence": package_qz_result.get("confidence", 0.0),
-                        "quality": package_quality,
-                    },
-                    "seal_quiet_zone": {
-                        "success": True,
-                        "reason": seal_quality_failure or "QUIET_ZONE_DETECTED",
-                        "confidence": seal_qz_result.get("confidence", 0.0),
-                        "quality": seal_quality,
-                    },
-                },
-            )
 
         package_ok, package_encoded = cv2.imencode(".jpg", package_img)
         seal_ok, seal_encoded = cv2.imencode(".jpg", seal_img)
