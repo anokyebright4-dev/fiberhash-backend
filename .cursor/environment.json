@@ -1,0 +1,17 @@
+{
+  "name": "fiberhash-backend",
+  "install": "sudo apt-get update && sudo apt-get install -y python3-venv && python3 -m venv .venv && . .venv/bin/activate && pip install --upgrade pip && pip install -r requirements.txt",
+  "terminals": [
+    {
+      "name": "api",
+      "command": ". .venv/bin/activate && uvicorn main:app --host 0.0.0.0 --port 8000 --reload",
+      "description": "FastAPI (FiberHash / Metalens Authentication API) served by uvicorn on port 8000. Docs at /docs, health at /health."
+    }
+  ],
+  "ports": [
+    {
+      "name": "api",
+      "port": 8000
+    }
+  ]
+}
