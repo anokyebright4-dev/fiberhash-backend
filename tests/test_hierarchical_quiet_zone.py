@@ -48,6 +48,31 @@ def _mean_corner_error(actual, expected):
     return float(np.mean(np.linalg.norm(main._qz_order_quad(actual) - expected, axis=1)))
 
 
+def _terminal_candidate(**overrides):
+    """One fully evidenced candidate for decision-predicate unit tests."""
+    candidate = {
+        "sides": [
+            {
+                "coverage": main.QUIET_ZONE_MIN_SIDE_COVERAGE + 0.1,
+                "relative_contrast": main.QUIET_ZONE_MIN_SIDE_RELATIVE_CONTRAST + 0.1,
+            }
+            for _ in range(4)
+        ],
+        "post": {
+            "core_std": 12.0,
+            "directional_coherence": 0.25,
+            "edge_band_ratio_max": 1.1,
+        },
+        "surface": {"eligible": True},
+        "warped": np.zeros((512, 512, 3), dtype=np.uint8),
+        "aspect": 0.9,
+        "right_angle": 0.9,
+        "score": max(0.9, main.QUIET_ZONE_MIN_CONFIDENCE),
+    }
+    candidate.update(overrides)
+    return candidate
+
+
 def _directional_motion_blur(image, length, angle_degrees):
     """Deterministic linear motion kernel; unlike Gaussian softness it has direction."""
     kernel = np.zeros((length, length), dtype=np.float32)
@@ -83,6 +108,8 @@ def test_nested_inner_boundary_beats_larger_outer_package_boundary():
     assert _mean_corner_error(result["corners"], expected) < 18.0
     assert result["image"].shape == (512, 512, 3)
     assert result["metrics"]["detection_source"] == "hierarchical_boundary_scanner"
+    assert result["metrics"]["terminal_acceptance"] is True
+    assert result["metrics"]["ambiguity_competition_reached"] is False
 
 
 def test_false_outer_rectangle_is_not_returned_as_a_successful_crop():
@@ -125,6 +152,8 @@ def test_printed_foreground_graphic_does_not_compete_with_filled_surface():
     assert result["success"], result
     assert _mean_corner_error(result["corners"], expected) < 25.0
     assert result["metrics"]["surface_eligibility"]["eligible"] is True
+    assert result["metrics"]["terminal_acceptance"] is True
+    assert result["metrics"]["ambiguity_competition_reached"] is False
 
 
 def test_handwritten_marks_do_not_make_a_physical_surface_ineligible():
@@ -137,6 +166,7 @@ def test_handwritten_marks_do_not_make_a_physical_surface_ineligible():
     assert result["success"], result
     assert _mean_corner_error(result["corners"], expected) < 22.0
     assert result["metrics"]["surface_eligibility"]["eligible"] is True
+    assert result["metrics"]["terminal_acceptance"] is True
 
 
 def test_material_eligibility_rejects_sparse_graphic_warp():
@@ -147,6 +177,22 @@ def test_material_eligibility_rejects_sparse_graphic_warp():
     assert post is not None
     eligibility = main._qz_surface_material_eligibility(graphic, post)
     assert eligibility["eligible"] is False
+
+
+def test_high_confidence_alone_cannot_establish_terminal_acceptance():
+    candidate = _terminal_candidate(score=0.99, sides=[])
+    validation = main._qz_terminal_validation(candidate)
+    assert validation["accepted"] is False
+    assert validation["checks"]["confidence_sufficient"] is True
+    assert validation["checks"]["four_side_support"] is False
+
+
+def test_high_scoring_graphic_that_fails_material_eligibility_cannot_terminally_win():
+    candidate = _terminal_candidate(score=0.99, surface={"eligible": False})
+    validation = main._qz_terminal_validation(candidate)
+    assert validation["accepted"] is False
+    assert validation["checks"]["confidence_sufficient"] is True
+    assert validation["checks"]["surface_eligible"] is False
 
 
 def test_plain_unoutlined_material_surface_remains_detectable():
@@ -164,6 +210,7 @@ def test_plain_unoutlined_material_surface_remains_detectable():
     assert result["success"], result
     assert _mean_corner_error(result["corners"], expected) < 20.0
     assert result["metrics"]["surface_eligibility"]["eligible"] is True
+    assert result["metrics"]["terminal_acceptance"] is True
 
 
 def test_off_centre_quiet_zone_does_not_require_a_centre_prior():
@@ -282,6 +329,105 @@ def test_brand_baseline_quality_rejection_is_not_reported_as_localisation_failur
         conn.close()
 
 
+def test_brand_baseline_ambiguity_exposes_candidates_and_preserves_raw_upload(
+    tmp_path,
+    monkeypatch,
+):
+    """Ambiguity diagnostics retain raw bytes without becoming QZ evidence."""
+    monkeypatch.setattr(main, "DB_PATH", str(tmp_path / "diagnostics.db"))
+    monkeypatch.setattr(main, "QUIET_ZONE_DIAGNOSTIC_DIR", str(tmp_path / "diagnostics"))
+    monkeypatch.setattr(main, "QUIET_ZONE_DIAGNOSTIC_TTL_SECONDS", 3600)
+    monkeypatch.chdir(tmp_path)
+    main.init_db()
+    main.create_unit_record(
+        "UNIT-AMBIGUITY", "ORDER", "SELLER", "BUYER", "MARKET", "PRODUCT",
+        "Product", "Brand", "Batch", None, None, None, None,
+    )
+    package_bytes = b"exact package multipart payload"
+    seal_bytes = b"exact seal multipart payload"
+    decoded_images = [
+        np.zeros((900, 900, 3), dtype=np.uint8),
+        np.ones((900, 900, 3), dtype=np.uint8),
+    ]
+    monkeypatch.setattr(main, "decode_image", lambda _: decoded_images.pop(0))
+    canonical = np.full((512, 512, 3), 127, dtype=np.uint8)
+    ambiguity = {
+        "winner": {
+            "final_score": 0.93,
+            "candidate_confidence": 0.93,
+            "corners": [[10, 10], [500, 10], [500, 500], [10, 500]],
+            "candidate_source": "material_region",
+            "candidate_area": 240100.0,
+            "geometry_score": 0.96,
+            "surface_eligibility": {"eligible": True, "tile_gradient_p30": 9.0},
+            "score_components": {"geometry_contribution": 0.35},
+        },
+        "competitor": {
+            "final_score": 0.89,
+            "candidate_confidence": 0.89,
+            "corners": [[100, 100], [450, 100], [450, 450], [100, 450]],
+            "candidate_source": "edge_contour",
+            "candidate_area": 122500.0,
+            "geometry_score": 0.88,
+            "surface_eligibility": {"eligible": True, "tile_gradient_p30": 8.0},
+            "score_components": {"geometry_contribution": 0.30},
+        },
+        "score_difference": 0.04,
+        "score_ratio": 0.957,
+    }
+
+    def extractor(image, capture_context):
+        if image[0, 0, 0] == 0:
+            return {
+                "success": False,
+                "reason": "QUIET_ZONE_DETECTION_AMBIGUOUS",
+                "confidence": 0.93,
+                "image": None,
+                "metrics": {"ambiguity": ambiguity},
+            }
+        return {
+            "success": True,
+            "reason": "QUIET_ZONE_DETECTED",
+            "confidence": 0.9,
+            "image": canonical,
+            "metrics": {"canonical_quality": main.canonical_quiet_zone_quality(canonical)},
+        }
+
+    monkeypatch.setattr(main, "extract_quiet_zone", extractor)
+    response = asyncio.run(
+        main.register_brand_baseline_images(
+            "UNIT-AMBIGUITY",
+            UploadFile(filename="package.jpg", file=io.BytesIO(package_bytes)),
+            UploadFile(filename="seal.jpg", file=io.BytesIO(seal_bytes)),
+        )
+    )
+    payload = json.loads(response.body)
+    package = payload["package_quiet_zone"]
+    assert response.status_code == 422
+    assert package["reason"] == "QUIET_ZONE_DETECTION_AMBIGUOUS"
+    assert package["ambiguity_diagnostics"] == ambiguity
+    assert "diagnostic_upload" in package
+    assert package["diagnostic_upload"]["debug_resubmission"] == {
+        "endpoint": "/debug/quiet-zone",
+        "multipart_field": "file",
+    }
+    assert "diagnostic_upload" not in payload["seal_quiet_zone"]
+
+    diagnostic_id = package["diagnostic_upload"]["diagnostic_id"]
+    stored = main.get_failed_quiet_zone_diagnostic_upload(diagnostic_id)
+    assert stored["original_bytes"] == package_bytes
+    retrieved = asyncio.run(main.get_failed_quiet_zone_upload_original(diagnostic_id))
+    assert retrieved.body == package_bytes
+    assert retrieved.headers["cache-control"] == "no-store"
+
+    conn = main.sqlite3.connect(main.DB_PATH)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM quiet_zone_diagnostic_uploads").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM quiet_zone_evidence").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
 def test_flat_panel_fails_closed():
     image = np.full((900, 900, 3), 40, dtype=np.uint8)
     cv2.rectangle(image, (250, 250), (650, 650), (180, 180, 180), -1)
@@ -298,11 +444,21 @@ def test_two_equally_supported_zones_are_ambiguous():
         cv2.rectangle(image, (x, y), (x + 299, y + 299), (245, 245, 245), 5)
     result = main.extract_quiet_zone(image)
     assert not result["success"]
-    assert result["reason"] in (
-        "QUIET_ZONE_DETECTION_AMBIGUOUS",
-        "QUIET_ZONE_DETECTION_CONFIDENCE_TOO_LOW",
-        "QUIET_ZONE_NOT_DETECTED",
-    )
+    assert result["reason"] == "QUIET_ZONE_DETECTION_AMBIGUOUS"
+    assert result["corners"] is None
+    assert result["image"] is None
+    ambiguity = result["metrics"]["ambiguity"]
+    assert result["confidence"] == round(ambiguity["winner"]["final_score"], 4)
+    assert ambiguity["score_difference"] >= 0.0
+    assert 0.0 < ambiguity["score_ratio"] <= 1.0
+    for candidate_name in ("winner", "competitor"):
+        candidate = ambiguity[candidate_name]
+        assert len(candidate["corners"]) == 4
+        assert candidate["candidate_area"] > 0.0
+        assert candidate["candidate_source"] in {"edge_contour", "material_region"}
+        assert candidate["surface_eligibility"]["eligible"] is True
+        assert candidate["terminal_validation"]["accepted"] is True
+        assert "geometry_contribution" in candidate["score_components"]
 
 
 def test_debug_quiet_zone_returns_the_extractor_canonical_png(monkeypatch):

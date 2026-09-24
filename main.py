@@ -55,6 +55,19 @@ QUIET_ZONE_EVIDENCE_DIR = os.environ.get(
     "QUIET_ZONE_EVIDENCE_DIR",
     os.path.join(BASE_DIR, "quiet_zone_evidence"),
 )
+# Failed-capture diagnostics are deliberately separate from canonical Quiet
+# Zone evidence.  They contain the original multipart bytes only for a short,
+# controlled investigation window after an ambiguity failure.
+QUIET_ZONE_DIAGNOSTIC_DIR = os.environ.get(
+    "QUIET_ZONE_DIAGNOSTIC_DIR",
+    os.path.join(BASE_DIR, "quiet_zone_diagnostics"),
+)
+QUIET_ZONE_DIAGNOSTIC_TTL_SECONDS = int(
+    os.environ.get("QUIET_ZONE_DIAGNOSTIC_TTL_SECONDS", "86400")
+)
+QUIET_ZONE_DIAGNOSTIC_MAX_RECORDS = int(
+    os.environ.get("QUIET_ZONE_DIAGNOSTIC_MAX_RECORDS", "25")
+)
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
@@ -165,6 +178,25 @@ def init_db():
     cursor.execute("""
        CREATE INDEX IF NOT EXISTS idx_quiet_zone_evidence_unit_created
        ON quiet_zone_evidence (unit_id, created_at)
+""")
+    cursor.execute("""
+       CREATE TABLE IF NOT EXISTS quiet_zone_diagnostic_uploads (
+            diagnostic_id TEXT PRIMARY KEY,
+            unit_id TEXT NOT NULL,
+            capture_type TEXT NOT NULL,
+            workflow TEXT NOT NULL,
+            upload_reference TEXT NOT NULL,
+            original_sha256 TEXT NOT NULL,
+            content_type TEXT,
+            extraction_reason TEXT NOT NULL,
+            diagnostics_json TEXT,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL
+       )
+""")
+    cursor.execute("""
+       CREATE INDEX IF NOT EXISTS idx_quiet_zone_diagnostic_uploads_expiry
+       ON quiet_zone_diagnostic_uploads (expires_at)
 """)
     cursor.execute("""
        CREATE TABLE IF NOT EXISTS challenge_cases (
@@ -363,6 +395,178 @@ def save_quiet_zone_evidence(
     finally:
         conn.close()
     return {"evidence_id": evidence_id, "image_reference": image_reference}
+
+
+def _quiet_zone_diagnostic_root():
+    """Resolve storage for expiring failed-upload diagnostics only."""
+    root = os.path.abspath(QUIET_ZONE_DIAGNOSTIC_DIR)
+    os.makedirs(root, exist_ok=True)
+    return root
+
+
+def _quiet_zone_diagnostic_path(diagnostic_id):
+    """Build a controlled path from an opaque UUID, never user input."""
+    if not re.fullmatch(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+        str(diagnostic_id),
+    ):
+        return None
+    return os.path.join(_quiet_zone_diagnostic_root(), f"{diagnostic_id}.upload")
+
+
+def _cleanup_quiet_zone_diagnostic_uploads():
+    """Remove expired records/files and cap local failed-upload retention."""
+    now = now_iso()
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        rows = conn.execute(
+            """SELECT diagnostic_id FROM quiet_zone_diagnostic_uploads
+               WHERE expires_at <= ? ORDER BY created_at ASC""",
+            (now,),
+        ).fetchall()
+        total = conn.execute(
+            "SELECT COUNT(*) FROM quiet_zone_diagnostic_uploads",
+        ).fetchone()[0]
+        # Make room for the record about to be added by the caller.
+        excess = max(0, total - max(1, QUIET_ZONE_DIAGNOSTIC_MAX_RECORDS) + 1)
+        if excess:
+            rows.extend(conn.execute(
+                """SELECT diagnostic_id FROM quiet_zone_diagnostic_uploads
+                   WHERE expires_at > ? ORDER BY created_at ASC LIMIT ?""",
+                (now, excess),
+            ).fetchall())
+        ids = sorted({row[0] for row in rows})
+        for diagnostic_id in ids:
+            path = _quiet_zone_diagnostic_path(diagnostic_id)
+            if path and os.path.isfile(path):
+                os.remove(path)
+        if ids:
+            conn.executemany(
+                "DELETE FROM quiet_zone_diagnostic_uploads WHERE diagnostic_id = ?",
+                [(diagnostic_id,) for diagnostic_id in ids],
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def save_failed_quiet_zone_diagnostic_upload(
+    unit_id,
+    capture_type,
+    workflow,
+    original_bytes,
+    content_type,
+    extraction_result,
+):
+    """Persist exact multipart bytes only for an ambiguity investigation.
+
+    This store is intentionally not Quiet Zone Evidence: no canonical image is
+    created, registration is unaffected, and records are expiring diagnostics.
+    """
+    if extraction_result.get("reason") != "QUIET_ZONE_DETECTION_AMBIGUOUS":
+        raise ValueError("Only ambiguity failures may be saved as diagnostics.")
+    if not isinstance(original_bytes, bytes) or not original_bytes:
+        raise ValueError("A failed-upload diagnostic requires original bytes.")
+    _cleanup_quiet_zone_diagnostic_uploads()
+    diagnostic_id = str(uuid.uuid4())
+    path = _quiet_zone_diagnostic_path(diagnostic_id)
+    created = datetime.now(timezone.utc)
+    expires = created + timedelta(seconds=max(60, QUIET_ZONE_DIAGNOSTIC_TTL_SECONDS))
+    # Preserve the exact pre-decode multipart payload; do not re-encode it.
+    with open(path, "xb") as handle:
+        handle.write(original_bytes)
+    record = (
+        diagnostic_id,
+        unit_id,
+        capture_type,
+        workflow,
+        os.path.basename(path),
+        hashlib.sha256(original_bytes).hexdigest(),
+        content_type or "application/octet-stream",
+        extraction_result["reason"],
+        json.dumps(extraction_result.get("metrics", {}), sort_keys=True),
+        created.isoformat(),
+        expires.isoformat(),
+    )
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute(
+            """INSERT INTO quiet_zone_diagnostic_uploads (
+                diagnostic_id, unit_id, capture_type, workflow, upload_reference,
+                original_sha256, content_type, extraction_reason, diagnostics_json,
+                created_at, expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            record,
+        )
+        conn.commit()
+    except Exception:
+        if os.path.isfile(path):
+            os.remove(path)
+        raise
+    finally:
+        conn.close()
+    return {
+        "diagnostic_id": diagnostic_id,
+        "expires_at": expires.isoformat(),
+        "original_image_url": (
+            f"/debug/quiet-zone/failed-upload/{diagnostic_id}/original"
+        ),
+        "debug_resubmission": {
+            "endpoint": "/debug/quiet-zone",
+            "multipart_field": "file",
+        },
+    }
+
+
+def get_failed_quiet_zone_diagnostic_upload(diagnostic_id):
+    """Retrieve an unexpired diagnostic through its opaque, controlled ID."""
+    if _quiet_zone_diagnostic_path(diagnostic_id) is None:
+        return None
+    _cleanup_quiet_zone_diagnostic_uploads()
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        record = conn.execute(
+            "SELECT * FROM quiet_zone_diagnostic_uploads WHERE diagnostic_id = ?",
+            (diagnostic_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if record is None:
+        return None
+    path = _quiet_zone_diagnostic_path(diagnostic_id)
+    if path is None or not os.path.isfile(path):
+        return None
+    with open(path, "rb") as handle:
+        original_bytes = handle.read()
+    if hashlib.sha256(original_bytes).hexdigest() != record["original_sha256"]:
+        return None
+    return {"record": dict(record), "original_bytes": original_bytes}
+
+
+def _save_ambiguity_diagnostic_upload_safely(
+    unit_id,
+    capture_type,
+    workflow,
+    original_bytes,
+    content_type,
+    extraction_result,
+):
+    """Keep diagnostics best-effort so a storage fault cannot alter the 422."""
+    if extraction_result.get("reason") != "QUIET_ZONE_DETECTION_AMBIGUOUS":
+        return None
+    try:
+        return save_failed_quiet_zone_diagnostic_upload(
+            unit_id,
+            capture_type,
+            workflow,
+            original_bytes,
+            content_type,
+            extraction_result,
+        )
+    except Exception as error:
+        print("QUIET ZONE AMBIGUITY DIAGNOSTIC SAVE FAILED:", str(error))
+        return None
 
 def decode_image(image_bytes: bytes):
     if not image_bytes:
@@ -1670,8 +1874,8 @@ def _qz_order_quad(points):
     return np.roll(quad, -start, axis=0).astype(np.float32)
 
 
-def _qz_fail(reason, capture_context, confidence=0.0):
-    return {
+def _qz_fail(reason, capture_context, confidence=0.0, metrics=None):
+    result = {
         "success": False,
         "reason": reason,
         "confidence": round(float(confidence), 4),
@@ -1679,6 +1883,85 @@ def _qz_fail(reason, capture_context, confidence=0.0):
         "image": None,
         "capture_context": capture_context,
     }
+    if metrics:
+        result["metrics"] = metrics
+    return result
+
+
+def _qz_ambiguity_candidate_diagnostics(candidate):
+    """Serialise already-computed evidence without re-running localisation."""
+    return {
+        "final_score": round(float(candidate["score"]), 6),
+        "candidate_confidence": round(
+            max(0.0, min(1.0, float(candidate["score"]))), 6,
+        ),
+        "corners": [
+            [round(float(x), 2), round(float(y), 2)]
+            for x, y in candidate["quad"]
+        ],
+        "candidate_source": candidate.get("proposal_source"),
+        "candidate_area": round(float(candidate["area"]), 3),
+        "geometry_score": round(float(candidate["geometry_score"]), 6),
+        "surface_eligibility": candidate.get("surface"),
+        "terminal_validation": candidate.get("terminal_validation"),
+        "score_components": candidate.get("score_components", {}),
+    }
+
+
+def _qz_ambiguity_diagnostics(best, competitor):
+    best_score = float(best["score"])
+    competitor_score = float(competitor["score"])
+    return {
+        "winner": _qz_ambiguity_candidate_diagnostics(best),
+        "competitor": _qz_ambiguity_candidate_diagnostics(competitor),
+        "score_difference": round(best_score - competitor_score, 6),
+        "score_ratio": round(competitor_score / best_score, 6) if best_score else None,
+    }
+
+
+def _qz_terminal_validation(candidate):
+    """Evaluate whether existing hard evidence positively establishes a QZ.
+
+    This does not introduce a second scoring model.  It composes the same
+    validation gates used to admit a candidate, plus the existing minimum
+    detector confidence.  Ambiguity remains necessary unless exactly one
+    viable candidate satisfies every condition.
+    """
+    sides = candidate.get("sides") or []
+    post = candidate.get("post") or {}
+    surface = candidate.get("surface") or {}
+    canonical = candidate.get("warped")
+    side_support = bool(sides) and (
+        min(item.get("coverage", 0.0) for item in sides)
+        >= QUIET_ZONE_MIN_SIDE_COVERAGE
+        and min(item.get("relative_contrast", 0.0) for item in sides)
+        >= QUIET_ZONE_MIN_SIDE_RELATIVE_CONTRAST
+    )
+    geometry = (
+        float(candidate.get("aspect", 0.0)) >= 0.62
+        and float(candidate.get("right_angle", 0.0)) >= 0.55
+    )
+    interior = (
+        float(post.get("core_std", 0.0)) >= 2.0
+        and float(post.get("directional_coherence", 1.0)) < 0.88
+    )
+    contamination_rejected = float(post.get("edge_band_ratio_max", float("inf"))) <= 5.0
+    canonical_valid = isinstance(canonical, np.ndarray) and canonical.shape == (
+        QUIET_ZONE_CANONICAL_SIZE,
+        QUIET_ZONE_CANONICAL_SIZE,
+        3,
+    )
+    confidence_sufficient = float(candidate.get("score", 0.0)) >= QUIET_ZONE_MIN_CONFIDENCE
+    checks = {
+        "surface_eligible": surface.get("eligible") is True,
+        "four_side_support": side_support,
+        "geometry_valid": geometry,
+        "interior_valid": interior,
+        "contamination_rejected": contamination_rejected,
+        "canonical_valid": canonical_valid,
+        "confidence_sufficient": confidence_sufficient,
+    }
+    return {"accepted": all(checks.values()), "checks": checks}
 
 
 def _qz_geometry(quad):
@@ -2133,6 +2416,21 @@ def extract_quiet_zone(image, capture_context="factory_registration"):
                     "sides": sides, "post": post, "surface": surface, "contour_parent": parent_index,
                     "proposal_source": proposal_sources[contour_index],
                     "support_score": float(support), "geometry_score": float(geometry_score),
+                    "score_components": {
+                        "side_support": round(float(support), 6),
+                        "coverage_strength": round(float(coverage_strength), 6),
+                        "contrast_strength": round(float(contrast_strength), 6),
+                        "directional_coherence": round(
+                            float(post["directional_coherence"]), 6,
+                        ),
+                        "support_contribution": round(0.44 * float(support), 6),
+                        "geometry_contribution": round(
+                            0.39 * float(geometry_score ** 2), 6,
+                        ),
+                        "coherence_contribution": round(
+                            0.17 * (1.0 - float(post["directional_coherence"])), 6,
+                        ),
+                    },
                 })
 
     # A dark physical border may be a set of four interrupted line segments,
@@ -2200,16 +2498,57 @@ def extract_quiet_zone(image, capture_context="factory_registration"):
     if not viable:
         return _qz_fail("QUIET_ZONE_NOT_DETECTED", capture_context)
     viable.sort(key=lambda item: item["score"], reverse=True)
-    best = viable[0]
+    for candidate in viable:
+        candidate["terminal_validation"] = _qz_terminal_validation(candidate)
+    terminal_candidates = [
+        candidate for candidate in viable
+        if candidate["terminal_validation"]["accepted"]
+    ]
+
+    # A unique fully validated physical surface has already established the
+    # Quiet Zone.  Do not let unrelated, weaker non-terminal hypotheses veto
+    # that positive finding through score-only ambiguity competition.
+    if len(terminal_candidates) == 1:
+        best = terminal_candidates[0]
+        terminal_acceptance = True
+        ambiguity_competition_reached = False
+    else:
+        terminal_acceptance = False
+        ambiguity_competition_reached = len(viable) > 1
+        if len(terminal_candidates) > 1:
+            # Multiple independently complete physical surfaces remain; no
+            # individual terminal recognition exists, so preserve fail-closed
+            # ambiguity without relying on an arbitrary score separation.
+            terminal_candidates.sort(key=lambda item: item["score"], reverse=True)
+            best, competitor = terminal_candidates[:2]
+            confidence = max(0.0, min(1.0, best["score"]))
+            return _qz_fail(
+                "QUIET_ZONE_DETECTION_AMBIGUOUS",
+                capture_context,
+                confidence,
+                metrics={
+                    "ambiguity": _qz_ambiguity_diagnostics(best, competitor),
+                },
+            )
+        best = viable[0]
     confidence = max(0.0, min(1.0, best["score"]))
-    if len(viable) > 1:
+    if not terminal_acceptance and len(viable) > 1:
         second_score = viable[1]["score"]
         # Scores are now normalised [0, 1], so use both the legacy absolute
         # margin and a relative margin.  Two separately located, similarly
         # evidenced physical patches are inherently ambiguous even if texture
         # noise moves one score by a few hundredths.
         if (best["score"] - second_score) < QUIET_ZONE_MIN_SCORE_MARGIN or second_score >= best["score"] * 0.85:
-            return _qz_fail("QUIET_ZONE_DETECTION_AMBIGUOUS", capture_context, confidence)
+            return _qz_fail(
+                "QUIET_ZONE_DETECTION_AMBIGUOUS",
+                capture_context,
+                confidence,
+                metrics={
+                    "ambiguity": _qz_ambiguity_diagnostics(best, viable[1]),
+                },
+            )
+    if not terminal_acceptance:
+        return _qz_fail("QUIET_ZONE_NOT_DETECTED", capture_context, confidence)
     if confidence < QUIET_ZONE_MIN_CONFIDENCE:
         return _qz_fail("QUIET_ZONE_DETECTION_CONFIDENCE_TOO_LOW", capture_context, confidence)
     canonical = best["warped"]
@@ -2232,6 +2571,9 @@ def extract_quiet_zone(image, capture_context="factory_registration"):
             "post_warp": best["post"],
             "surface_eligibility": best["surface"],
             "ambiguity_margin": ambiguity_margin,
+            "terminal_acceptance": terminal_acceptance,
+            "ambiguity_competition_reached": ambiguity_competition_reached,
+            "terminal_validation": best["terminal_validation"],
             "canonical_quality": canonical_quality,
         },
     }
@@ -4447,21 +4789,49 @@ async def register_brand_baseline_images(
         )
 
         if not package_qz_result.get("success") or not seal_qz_result.get("success"):
+            package_diagnostic_upload = _save_ambiguity_diagnostic_upload_safely(
+                unit_id,
+                "package",
+                "brand_baseline",
+                package_bytes,
+                package_image.content_type,
+                package_qz_result,
+            )
+            seal_diagnostic_upload = _save_ambiguity_diagnostic_upload_safely(
+                unit_id,
+                "seal",
+                "brand_baseline",
+                seal_bytes,
+                seal_image.content_type,
+                seal_qz_result,
+            )
+            package_response = {
+                "success": package_qz_result.get("success", False),
+                "reason": package_qz_result.get("reason"),
+                "confidence": package_qz_result.get("confidence", 0.0),
+            }
+            seal_response = {
+                "success": seal_qz_result.get("success", False),
+                "reason": seal_qz_result.get("reason"),
+                "confidence": seal_qz_result.get("confidence", 0.0),
+            }
+            if package_diagnostic_upload is not None:
+                package_response["ambiguity_diagnostics"] = (
+                    package_qz_result.get("metrics", {}).get("ambiguity")
+                )
+                package_response["diagnostic_upload"] = package_diagnostic_upload
+            if seal_diagnostic_upload is not None:
+                seal_response["ambiguity_diagnostics"] = (
+                    seal_qz_result.get("metrics", {}).get("ambiguity")
+                )
+                seal_response["diagnostic_upload"] = seal_diagnostic_upload
             return JSONResponse(
                 status_code=422,
                 content={
                     "status": "error",
                     "message": "One or both brand baseline images failed Quiet Zone detection.",
-                    "package_quiet_zone": {
-                        "success": package_qz_result.get("success", False),
-                        "reason": package_qz_result.get("reason"),
-                        "confidence": package_qz_result.get("confidence", 0.0),
-                    },
-                    "seal_quiet_zone": {
-                        "success": seal_qz_result.get("success", False),
-                        "reason": seal_qz_result.get("reason"),
-                        "confidence": seal_qz_result.get("confidence", 0.0),
-                    },
+                    "package_quiet_zone": package_response,
+                    "seal_quiet_zone": seal_response,
                 },
             )
 
@@ -5812,6 +6182,42 @@ async def get_quiet_zone_evidence_image(evidence_id: str):
     if not os.path.isfile(image_path):
         raise HTTPException(status_code=404, detail="Quiet Zone evidence image not found.")
     return FileResponse(image_path, media_type="image/png")
+
+
+@app.get(
+    "/debug/quiet-zone/failed-upload/{diagnostic_id}/original",
+    responses={
+        200: {
+            "description": "Exact temporary original upload for Quiet Zone debugging.",
+            "content": {
+                "application/octet-stream": {},
+                "image/jpeg": {},
+                "image/png": {},
+                "image/webp": {},
+            },
+        },
+    },
+)
+async def get_failed_quiet_zone_upload_original(diagnostic_id: str):
+    """Download an unexpired raw ambiguity upload for resubmission to debug."""
+    diagnostic = get_failed_quiet_zone_diagnostic_upload(diagnostic_id)
+    if diagnostic is None:
+        raise HTTPException(status_code=404, detail="Diagnostic upload not found or expired.")
+    stored_type = diagnostic["record"].get("content_type")
+    media_type = stored_type if stored_type in {
+        "image/jpeg", "image/png", "image/webp",
+    } else "application/octet-stream"
+    return Response(
+        content=diagnostic["original_bytes"],
+        media_type=media_type,
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": (
+                "attachment; filename=failed-quiet-zone-upload.bin"
+            ),
+        },
+    )
 
 
 @app.post(
