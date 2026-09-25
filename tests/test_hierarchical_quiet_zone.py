@@ -73,6 +73,16 @@ def _terminal_candidate(**overrides):
     return candidate
 
 
+def _region_candidate(corners, score, proposal_source):
+    """A terminal-capable candidate used to exercise proposal consolidation."""
+    geometry = main._qz_geometry(np.asarray(corners, dtype=np.float32))
+    assert geometry is not None
+    candidate = _terminal_candidate(score=score)
+    candidate.update(geometry)
+    candidate["proposal_source"] = proposal_source
+    return candidate
+
+
 def _directional_motion_blur(image, length, angle_degrees):
     """Deterministic linear motion kernel; unlike Gaussian softness it has direction."""
     kernel = np.zeros((length, length), dtype=np.float32)
@@ -120,6 +130,65 @@ def test_false_outer_rectangle_is_not_returned_as_a_successful_crop():
     outer_area = abs(cv2.contourArea(np.array([[120, 140], [1070, 110], [1100, 875], [150, 900]], np.float32)))
     expected_area = abs(cv2.contourArea(expected))
     assert abs(detected_area - expected_area) < abs(detected_area - outer_area)
+
+
+def test_same_region_proposals_are_consolidated_before_terminal_ambiguity():
+    outer = _region_candidate(
+        [[100, 100], [500, 100], [500, 500], [100, 500]],
+        score=0.94,
+        proposal_source="material_region",
+    )
+    # A separately generated contour proposal is mostly nested in the same
+    # surface, but it is not close enough for the prior centre/area-only
+    # clustering rule.  It must not become a second physical hypothesis.
+    refined = _region_candidate(
+        [[145, 108], [485, 108], [485, 448], [145, 448]],
+        score=0.79,
+        proposal_source="edge_contour",
+    )
+
+    assert main._qz_same_physical_region(outer, refined) is True
+    representatives = main._qz_consolidate_same_region_candidates([outer, refined])
+
+    assert representatives == [outer]
+    assert main._qz_terminal_validation(representatives[0])["accepted"] is True
+    assert len(representatives) == 1
+
+
+def test_nested_near_identical_quadrilaterals_consolidate_to_one_surface():
+    first = _region_candidate(
+        [[200, 180], [640, 180], [640, 620], [200, 620]],
+        score=0.91,
+        proposal_source="edge_contour",
+    )
+    second = _region_candidate(
+        [[248, 194], [622, 194], [622, 568], [248, 568]],
+        score=0.89,
+        proposal_source="material_region",
+    )
+
+    representatives = main._qz_consolidate_same_region_candidates([first, second])
+
+    assert len(representatives) == 1
+    assert representatives[0] is first
+
+
+def test_spatially_distinct_terminal_regions_are_not_consolidated():
+    first = _region_candidate(
+        [[80, 80], [380, 80], [380, 380], [80, 380]],
+        score=0.91,
+        proposal_source="material_region",
+    )
+    second = _region_candidate(
+        [[560, 560], [860, 560], [860, 860], [560, 860]],
+        score=0.90,
+        proposal_source="edge_contour",
+    )
+
+    representatives = main._qz_consolidate_same_region_candidates([first, second])
+
+    assert representatives == [first, second]
+    assert all(main._qz_terminal_validation(candidate)["accepted"] for candidate in representatives)
 
 
 def test_printed_chroma_neutral_panel_is_not_a_semantic_quiet_zone_candidate():

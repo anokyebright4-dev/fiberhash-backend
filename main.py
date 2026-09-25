@@ -611,6 +611,13 @@ QUIET_ZONE_MIN_SCORE_MARGIN = 0.08
 QUIET_ZONE_SIDE_GRADIENT_SIGMAS = (0.0, 1.2, 2.4)
 QUIET_ZONE_MIN_SIDE_COVERAGE = 0.30
 QUIET_ZONE_MIN_SIDE_RELATIVE_CONTRAST = 1.18
+
+# These are candidate-identity tolerances, not extraction acceptance
+# thresholds.  They consolidate independently generated boundary proposals
+# only when their polygons describe substantially the same physical surface.
+QUIET_ZONE_SAME_REGION_MIN_SMALLER_OVERLAP = 0.95
+QUIET_ZONE_SAME_REGION_MIN_AREA_RATIO = 0.70
+
 def _order_quiet_zone_points(points):
     """
     Return four points in this order:
@@ -2183,6 +2190,46 @@ def _qz_is_contained(inner, outer):
     return all(cv2.pointPolygonTest(outer["quad"], tuple(point), False) >= 0 for point in inner["quad"])
 
 
+def _qz_same_physical_region(first, second):
+    """Return whether two quadrilateral proposals identify one surface.
+
+    Candidate source is deliberately irrelevant.  A material-region proposal
+    and an edge-contour proposal can refine different parts of the same
+    physical boundary; they should not become ambiguity competitors merely
+    because their areas differ modestly.
+    """
+    first_quad = np.ascontiguousarray(_qz_order_quad(first["quad"]), dtype=np.float32)
+    second_quad = np.ascontiguousarray(_qz_order_quad(second["quad"]), dtype=np.float32)
+    first_area = abs(float(cv2.contourArea(first_quad)))
+    second_area = abs(float(cv2.contourArea(second_quad)))
+    smaller_area = min(first_area, second_area)
+    larger_area = max(first_area, second_area)
+    if smaller_area <= 1.0 or larger_area <= 1.0:
+        return False
+    try:
+        intersection_area, _ = cv2.intersectConvexConvex(first_quad, second_quad)
+    except cv2.error:
+        return False
+    if not np.isfinite(intersection_area):
+        return False
+    smaller_overlap = float(intersection_area) / smaller_area
+    area_ratio = smaller_area / larger_area
+    return (
+        smaller_overlap >= QUIET_ZONE_SAME_REGION_MIN_SMALLER_OVERLAP
+        and area_ratio >= QUIET_ZONE_SAME_REGION_MIN_AREA_RATIO
+    )
+
+
+def _qz_consolidate_same_region_candidates(candidates):
+    """Keep the strongest representative of every physical-region hypothesis."""
+    representatives = []
+    for candidate in sorted(candidates, key=lambda item: item["score"], reverse=True):
+        if any(_qz_same_physical_region(candidate, existing) for existing in representatives):
+            continue
+        representatives.append(candidate)
+    return representatives
+
+
 def _qz_hough_quads(gray):
     """Generate quadrilateral hypotheses from pairs of perpendicular lines."""
     edges = cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), 30, 100)
@@ -2463,22 +2510,10 @@ def extract_quiet_zone(image, capture_context="factory_registration"):
     if not candidates:
         return _qz_fail("QUIET_ZONE_NOT_DETECTED", capture_context)
 
-    # Cluster repeated detections of the same physical boundary across edge
-    # thresholds.  Unlike the previous attempt, nesting is never clustered.
-    candidates.sort(key=lambda item: item["score"], reverse=True)
-    distinct = []
-    for candidate in candidates:
-        centre = candidate["quad"].mean(axis=0)
-        size = math.sqrt(candidate["area"])
-        duplicate = False
-        for existing in distinct:
-            distance = float(np.linalg.norm(centre - existing["quad"].mean(axis=0)))
-            ratio = math.sqrt(candidate["area"] / existing["area"])
-            if distance < max(12.0, size * 0.08) and 0.88 <= ratio <= 1.14:
-                duplicate = True
-                break
-        if not duplicate:
-            distinct.append(candidate)
+    # Consolidate repeated edge/material/hierarchy proposals for one physical
+    # surface before loose-enclosure and terminal ambiguity evaluation.
+    # Distinct surfaces remain separate because they do not strongly overlap.
+    distinct = _qz_consolidate_same_region_candidates(candidates)
 
     # A candidate that encloses a smaller, independently supported candidate
     # is a loose package boundary.  It cannot win just because it is salient.
